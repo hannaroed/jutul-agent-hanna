@@ -125,6 +125,15 @@ def _final_text(messages: list[Any]) -> str:
 _ALIGNED_ENVS: set[str] = set()
 
 
+async def _run_prompts(runner: Any, prompt: str, follow_up_prompts: list[str]) -> Any:
+    result = await runner.run_prompt(prompt)
+    for follow_up in follow_up_prompts:
+        if result.interrupts:
+            break
+        result = await runner.run_prompt(follow_up)
+    return result
+
+
 def _golden_env(adapter: Any, simulator: str) -> Path:
     """A prepared workspace env for this simulator, built once and kept aligned.
 
@@ -174,6 +183,7 @@ async def _run_jutul_session(
     *,
     simulator: str,
     prompt: str,
+    follow_up_prompts: list[str],
     fixtures: Mapping[str, str],
     needs_env: bool,
     needs_display: bool,
@@ -252,7 +262,7 @@ async def _run_jutul_session(
         # ground truth, the sharpest signal an eval run offers.
         if ground_truth:
             host.session.trace.append(EVAL_TARGET, {"expected": ground_truth})
-        result = await host.runner.run_prompt(prompt)
+        result = await _run_prompts(host.runner, prompt, follow_up_prompts)
     finally:
         await host.aclose()
 
@@ -269,6 +279,7 @@ def jutul_agent_solver(simulator: str = "jutuldarcy") -> Solver:
         fixtures = state.metadata.get("fixtures", {})
         needs_env = bool(state.metadata.get("needs_env", False))
         needs_display = bool(state.metadata.get("needs_display", False))
+        follow_up_prompts = list(state.metadata.get("follow_up_prompts", []))
         sim = state.metadata.get("simulator", simulator)
         scratch = Path(tempfile.gettempdir()) / "jutul-agent-eval" / uuid.uuid4().hex[:8]
         scratch.mkdir(parents=True)
@@ -278,6 +289,7 @@ def jutul_agent_solver(simulator: str = "jutuldarcy") -> Solver:
             final = await _run_jutul_session(
                 simulator=sim,
                 prompt=state.input_text,
+                follow_up_prompts=follow_up_prompts,
                 fixtures=fixtures,
                 needs_env=needs_env,
                 needs_display=needs_display,

@@ -31,6 +31,7 @@ from jutul_agent.eval.solver import (  # noqa: E402
     STORE_WORKSPACE,
     _bridge_model,
     _final_text,
+    _run_prompts,
 )
 from jutul_agent.simulators import registry  # noqa: E402
 from jutul_agent.trace import TraceLog  # noqa: E402
@@ -130,6 +131,42 @@ def test_openai_eval_uses_native_responses_bridge(monkeypatch: pytest.MonkeyPatc
     assert model.use_responses_api is True
 
 
+async def test_run_prompts_uses_one_runner_for_every_turn() -> None:
+    class Runner:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        async def run_prompt(self, prompt: str) -> SimpleNamespace:
+            self.prompts.append(prompt)
+            return SimpleNamespace(
+                messages=[AIMessage(content=f"answer {len(self.prompts)}")],
+                interrupts=[],
+            )
+
+    runner = Runner()
+    result = await _run_prompts(runner, "first", ["second", "third"])
+
+    assert runner.prompts == ["first", "second", "third"]
+    assert _final_text(result.messages) == "answer 3"
+
+
+async def test_run_prompts_stops_after_an_interrupt() -> None:
+    class Runner:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        async def run_prompt(self, prompt: str) -> SimpleNamespace:
+            self.prompts.append(prompt)
+            interrupts = [object()] if prompt == "second" else []
+            return SimpleNamespace(messages=[], interrupts=interrupts)
+
+    runner = Runner()
+    result = await _run_prompts(runner, "first", ["second", "third"])
+
+    assert runner.prompts == ["first", "second"]
+    assert result.interrupts
+
+
 def test_runconfig_hashes_the_tunable_inputs() -> None:
     config = build_runconfig(registry.get("jutuldarcy"))
     assert len(config["prompt_sha256"]) == 64
@@ -152,6 +189,7 @@ def test_task_suites_import_and_build() -> None:
         guardrails,
         jutuldarcy,
         mocca,
+        multiturn,
         plotting,
         search,
         search_source,
@@ -165,6 +203,7 @@ def test_task_suites_import_and_build() -> None:
         (battmo, battmo.battmo),
         (fimbul, fimbul.fimbul),
         (mocca, mocca.mocca),
+        (multiturn, multiturn.multiturn),
         (filesystem, filesystem.filesystem),
         (filesystem_source, filesystem_source.filesystem_source),
         (search, search.search),
@@ -173,6 +212,25 @@ def test_task_suites_import_and_build() -> None:
     ]:
         suite = factory()
         assert suite.dataset, f"{module.__name__}: empty dataset"
+
+
+def test_multiturn_pilot_pairs_a_control_with_three_turns() -> None:
+    from jutul_agent.eval.tasks.multiturn import multiturn
+
+    samples = multiturn().dataset
+
+    assert [sample.id for sample in samples] == ["mt0-direct-control", "mt1-reference-case"]
+    assert not samples[0].metadata
+    assert len(samples[1].metadata["follow_up_prompts"]) == 2
+
+
+def test_canary_uses_the_real_workspace_relative_path() -> None:
+    from jutul_agent.eval.tasks.canary import canary
+
+    sample = canary().dataset[0]
+
+    assert "`data.jl`" in sample.input
+    assert "`/data.jl`" not in sample.input
 
 
 def test_eval_cli_lists_suites_and_rejects_unknown(capsys) -> None:
@@ -188,6 +246,7 @@ def test_eval_cli_lists_suites_and_rejects_unknown(capsys) -> None:
         "battmo",
         "fimbul",
         "mocca",
+        "multiturn",
         "filesystem",
         "filesystem_source",
         "search",

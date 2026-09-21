@@ -24,7 +24,7 @@ def canary() -> Task:
     sample = Sample(
         id="x0-sum-from-file",
         input=(
-            "Read the workspace file `/data.jl` with read_file, then use "
+            "Read the workspace file `data.jl` with read_file, then use "
             "run_julia to evaluate its contents as Julia code. Reply with "
             "the numeric result."
         ),

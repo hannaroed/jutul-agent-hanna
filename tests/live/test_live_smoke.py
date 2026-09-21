@@ -55,7 +55,7 @@ async def _attempt(tmp_path: Path) -> None:
             agent, _ = build_agent(session, model=model)
             runner = TurnRunner(agent, thread_id=session.session_id, trace=session.trace)
             prompt = (
-                "Read the workspace file `/data.jl` with read_file, then use run_julia "
+                "Read the workspace file `data.jl` with read_file, then use run_julia "
                 "to evaluate its contents as Julia code. Reply with the numeric result."
             )
             result = await runner.run_prompt(prompt)
