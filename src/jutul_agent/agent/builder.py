@@ -54,6 +54,11 @@ from jutul_agent.agent.plot_julia import (
 )
 from jutul_agent.agent.prompts import assemble_session_prompt
 from jutul_agent.agent.recovery import InvalidToolCallRecoveryMiddleware
+from jutul_agent.agent.summarization import (
+    SCIENTIFIC_SUMMARY_PROMPT,
+    build_scientific_summarization_middleware,
+)
+from jutul_agent.agent.tool_scheduling import SequentialToolCallsMiddleware
 from jutul_agent.agent.tools import (
     make_record_attempt_tool,
     make_reset_julia_tool,
@@ -124,11 +129,7 @@ def register_provider_profiles() -> None:
     stock general-purpose subagent; every prompt rule lives in
     ``agent.prompts`` so each is stated exactly once.
 
-    Parallel tool calls are a first-class capability (the tool node runs them
-    concurrently) and we do not suppress them per provider: local models emit
-    clean parallel calls the vast majority of the time, and the rare malformed
-    one is caught generically by ``InvalidToolCallRecoveryMiddleware`` rather
-    than by crippling the capability through the prompt.
+    ``SequentialToolCallsMiddleware`` handles tool scheduling.
     """
 
     global _provider_profiles_registered
@@ -430,6 +431,7 @@ def build_agent(
     added_dirs: Sequence[str | Path] | None = None,
     surface: str | None = None,
     extensions: Sequence[Capability] = (),
+    harness_strategies: Any | None = None,
 ) -> tuple[Any, CompositeBackend]:
     """Build the session agent and return it with its live ``CompositeBackend``.
 
@@ -444,6 +446,9 @@ def build_agent(
     """
     if surface is None:
         surface = session.surface
+    from jutul_agent.agent.strategies import HarnessStrategies
+
+    strategies = harness_strategies or HarnessStrategies()
 
     register_provider_profiles()
     # The file tools run on real paths; on Windows, let deepagents' path validation
@@ -483,31 +488,45 @@ def build_agent(
     skills = skill_sources(session.simulator) + collect_skill_dirs(active)
     model_spec = resolve_model(model)
     resolved_model = _resolve_model_for_agent(model_spec)
+    system_prompt = assemble_session_prompt(
+        session.simulator,
+        open_windows=session.open_windows,
+        resumed=session.resumed,
+        workspace=workspace_root(),
+        primary_source=_primary_source_path(session.simulator, package_sources),
+        surface=surface,
+        extra_fragments=collect_prompt_fragments(active),
+    )
+    if harness_strategies is not None:
+        from deepagents.middleware.summarization import DEEPAGENTS_DEFAULT_SUMMARY_PROMPT
+
+        session.trace.append(
+            "eval_harness_config",
+            {
+                "strategies": strategies.to_dict(),
+                "system_prompt": system_prompt,
+                "summary_prompt": SCIENTIFIC_SUMMARY_PROMPT
+                if strategies.summarization == "scientific"
+                else DEEPAGENTS_DEFAULT_SUMMARY_PROMPT,
+                "model_profile": getattr(resolved_model, "profile", None),
+            },
+        )
     agent = create_deep_agent(
         model=resolved_model,
         backend=backend,
         tools=tools,
-        system_prompt=assemble_session_prompt(
-            session.simulator,
-            open_windows=session.open_windows,
-            resumed=session.resumed,
-            workspace=workspace_root(),
-            primary_source=_primary_source_path(session.simulator, package_sources),
-            surface=surface,
-            extra_fragments=collect_prompt_fragments(active),
-        ),
+        system_prompt=system_prompt,
         skills=skills,
         subagents=subagents,
         interrupt_on=interrupt_on_for_mode(mode),
-        # Auto-compaction is deepagents' stock SummarizationMiddleware (installed
-        # by create_deep_agent); its trigger is sized from the model profile,
-        # which _set_profile_window points at the real loaded window. The
-        # TraceRecorder records each compaction. Tool-result clearing is our one
-        # addition: it sheds old results below the summary trigger so the
-        # expensive summary call is reserved for when clearing isn't enough.
+        # Clear older tool results before summarising the conversation.
         middleware=[
             m
             for m in (
+                # Replace the stock summariser under the same middleware name.
+                build_scientific_summarization_middleware(
+                    resolved_model, backend, strategies=strategies
+                ),
                 # Opt-in since deepagents stopped installing it by default. The
                 # planning it gives the model is worth its prompt cost on the
                 # long multi-step runs this agent does, and the todo list is a
@@ -516,7 +535,12 @@ def build_agent(
                 build_memory_middleware(backend, memory_dir),
                 build_context_editing_middleware(
                     model_id=model_spec if isinstance(model_spec, str) else None,
-                ),
+                    model=resolved_model,
+                )
+                if strategies.clear_tool_results
+                else None,
+                # Ask supported providers to choose one tool call at a time.
+                SequentialToolCallsMiddleware() if strategies.sequential_tools else None,
                 # Before the recorder in the list so its after_model hook runs
                 # after the recorder's (after_model composes in reverse): the
                 # model call is traced before a recovery jump re-enters the model.

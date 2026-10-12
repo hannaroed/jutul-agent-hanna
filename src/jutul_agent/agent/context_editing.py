@@ -49,7 +49,20 @@ def keep_recent_tool_results(window: int | None) -> int:
     return 3 if (window and window < _SMALL_WINDOW) else 6
 
 
-def build_context_editing_middleware(model_id: str | None = None) -> Any:
+def _profile_window(model: Any | None) -> int | None:
+    """Read a pre-built model's declared input window, if it has one."""
+    profile = getattr(model, "profile", None)
+    if not isinstance(profile, dict):
+        return None
+    value = profile.get("max_input_tokens")
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def build_context_editing_middleware(
+    model_id: str | None = None,
+    *,
+    model: Any | None = None,
+) -> Any:
     """Middleware that clears older tool results when the context grows large.
 
     The trigger is sized to the model's window so it fires before summarization;
@@ -58,11 +71,14 @@ def build_context_editing_middleware(model_id: str | None = None) -> Any:
     """
     from langchain.agents.middleware import ClearToolUsesEdit, ContextEditingMiddleware
 
+    # Eval bridge models carry the context budget in their profile.
     window = None
     if model_id is not None:
         from jutul_agent.models import context_window
 
         window = context_window(model_id)
+    if window is None:
+        window = _profile_window(model)
     return ContextEditingMiddleware(
         edits=[
             ClearToolUsesEdit(

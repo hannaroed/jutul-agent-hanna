@@ -42,6 +42,14 @@ def test_build_context_editing_middleware_config(monkeypatch) -> None:
     assert "record_attempt" in edit.exclude_tools
 
 
+def test_build_context_editing_uses_prebuilt_model_profile() -> None:
+    model = MagicMock(profile={"max_input_tokens": 16_384})
+    middleware = build_context_editing_middleware(model=model)
+    (edit,) = middleware.edits
+    assert edit.trigger == int(16_384 * 0.6)
+    assert edit.keep == 3
+
+
 def _tool_round(call_id: str, name: str, result: str) -> list:
     """An AIMessage requesting one tool call plus its ToolMessage result."""
     return [
