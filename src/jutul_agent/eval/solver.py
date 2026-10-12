@@ -16,12 +16,12 @@ Sample metadata understood by the solver:
   workspace first (slow on a cold depot; off by default).
 - ``needs_display``: start a managed virtual display so GLMakie plotting
   works headless.
+- ``context_window``: input-context budget for bridged models.
 """
 
 from __future__ import annotations
 
 import asyncio
-import re
 import tempfile
 import uuid
 from collections.abc import Mapping
@@ -32,11 +32,14 @@ from inspect_ai.agent import AgentState, agent_bridge
 from inspect_ai.model import ModelOutput, get_model
 from inspect_ai.solver import Generate, Solver, TaskState, solver
 
+from jutul_agent.agent.text import strip_internal_capsules
+
 STORE_WORKSPACE = "jutul/workspace"
 STORE_TRACE_DB = "jutul/trace_db"
 STORE_SESSION_ID = "jutul/session_id"
 STORE_OUTPUT_DIR = "jutul/output_dir"
 STORE_RUNCONFIG = "jutul/runconfig"
+STORE_ARCHIVE = "jutul/archive"
 
 # One session at a time: the workspace root is process-global state
 # (``paths.set_workspace_root``), so concurrent samples would race on it.
@@ -57,7 +60,7 @@ def load_eval_credentials() -> None:
     load_dotenv()
 
 
-def _bridge_model() -> Any:
+def _bridge_model(context_window: int | None = None) -> Any:
     """The model instance the agent under test calls.
 
     The literal model name ``inspect`` is what the agent bridge intercepts;
@@ -90,19 +93,26 @@ def _bridge_model() -> Any:
     else:
         spec = "anthropic:inspect"
     options = {"use_responses_api": True} if provider == "openai" else {}
-    return init_chat_model(spec, disable_streaming=True, api_key="inspect-agent-bridge", **options)
+    model = init_chat_model(
+        spec,
+        disable_streaming=True,
+        api_key="inspect-agent-bridge",
+        **options,
+    )
+    if context_window is not None:
+        if context_window <= 0:
+            raise ValueError("context_window must be a positive integer")
+        profile = getattr(model, "profile", None)
+        updated = dict(profile) if isinstance(profile, dict) else {}
+        updated["max_input_tokens"] = context_window
+        model.profile = updated
+    return model
 
 
 # The bridge annotates assistant text with internal capsules that must not
 # reach scorers: a <content-internal> metadata tag, and (for Gemini) a redacted
 # <think> reasoning signature. Both carry base64 a number-extracting check would
 # happily mine digits out of, so they are stripped before the answer is graded.
-_INTERNAL_RE = re.compile(
-    r"<content-internal>.*?</content-internal>|<think\b[^>]*>.*?</think>",
-    re.DOTALL,
-)
-
-
 def _final_text(messages: list[Any]) -> str:
     """Text of the last assistant message, flattened from content blocks."""
     for message in reversed(messages):
@@ -110,13 +120,13 @@ def _final_text(messages: list[Any]) -> str:
             continue
         content = message.content
         if isinstance(content, str):
-            return _INTERNAL_RE.sub("", content).strip()
+            return strip_internal_capsules(content).strip()
         if isinstance(content, list):
             parts = [
                 part.get("text", "") if isinstance(part, dict) else str(part) for part in content
             ]
-            return _INTERNAL_RE.sub("", "\n".join(p for p in parts if p)).strip()
-        return _INTERNAL_RE.sub("", str(content)).strip()
+            return strip_internal_capsules("\n".join(p for p in parts if p)).strip()
+        return strip_internal_capsules(str(content)).strip()
     return ""
 
 
@@ -187,6 +197,9 @@ async def _run_jutul_session(
     fixtures: Mapping[str, str],
     needs_env: bool,
     needs_display: bool,
+    context_window: int | None,
+    harness_strategies: Any,
+    julia_project_override: str | None,
     scratch: Path,
     store: Any,
     ground_truth: str | None = None,
@@ -211,27 +224,46 @@ async def _run_jutul_session(
         from jutul_agent.simulators.env_setup import prepare_workspace_env
         from jutul_agent.workspace import resolve_julia_project
 
-        julia_project = resolve_julia_project(workspace)
-        if julia_project == workspace / ".jutul-agent" / "julia-env":
+        julia_project = (
+            Path(julia_project_override).resolve()
+            if julia_project_override
+            else resolve_julia_project(workspace)
+        )
+        if julia_project_override and not (julia_project / "Manifest.toml").is_file():
+            raise ValueError("the supplied Julia project must have an instantiated Manifest.toml")
+        if not julia_project_override and julia_project == workspace / ".jutul-agent" / "julia-env":
             golden = await asyncio.to_thread(_golden_env, adapter, simulator)
             await asyncio.to_thread(shutil.copytree, golden, julia_project, dirs_exist_ok=True)
-        await asyncio.to_thread(
-            prepare_workspace_env,
-            adapter,
-            workspace=workspace,
-            julia_project=julia_project,
-            sim_name=simulator,
-        )
+        if not julia_project_override:
+            await asyncio.to_thread(
+                prepare_workspace_env,
+                adapter,
+                workspace=workspace,
+                julia_project=julia_project,
+                sim_name=simulator,
+            )
 
     from jutul_agent.eval.runconfig import build_runconfig
 
-    store.set(STORE_RUNCONFIG, build_runconfig(adapter, julia_project=julia_project))
+    store.set(
+        STORE_RUNCONFIG,
+        build_runconfig(
+            adapter,
+            julia_project=julia_project,
+            context_window=context_window,
+            strategies=harness_strategies,
+        ),
+    )
 
-    # Persist the session trace to a discoverable eval workspace under the state
-    # home (not the temp scratch, which is cleaned up) so eval runs — where the
-    # answer is known and silent failures matter most — can be reviewed afterwards
-    # with `jutul-agent review`. Only the trace persists; the workspace and
-    # artifacts stay in scratch.
+    from jutul_agent.eval.archive import archive_tree, write_json
+
+    archive = Path(store.get(STORE_ARCHIVE))
+    write_json(archive / "runconfig.json", store.get(STORE_RUNCONFIG))
+    if julia_project is not None:
+        archive_tree(julia_project, archive / "julia-environment")
+
+    # Session traces remain discoverable through `jutul-agent review`; the
+    # solver also archives the complete workspace and trace on every exit path.
     from jutul_agent.paths import eval_sessions_state_root
     from jutul_agent.session_host import SessionHost
 
@@ -242,7 +274,7 @@ async def _run_jutul_session(
     host = await SessionHost.start(
         simulator=adapter,
         surface="tui",
-        model=_bridge_model(),
+        model=_bridge_model(context_window),
         approval_mode="auto",
         workspace=workspace,
         state_root=eval_sessions_state_root(simulator),
@@ -252,19 +284,37 @@ async def _run_jutul_session(
         discover=False,
         warmup=False,
         virtual_display=needs_display,
+        harness_strategies=harness_strategies,
     )
     try:
         store.set(STORE_WORKSPACE, str(workspace))
         store.set(STORE_TRACE_DB, str(host.session.state_dir / "trace.sqlite"))
         store.set(STORE_SESSION_ID, host.session.session_id)
         store.set(STORE_OUTPUT_DIR, str(host.session.output_dir))
+        from jutul_agent.eval.runconfig import _sha256_text
+        from jutul_agent.trace import TraceLog
+
+        with TraceLog.open_readonly(host.session.state_dir / "trace.sqlite") as trace:
+            actual = trace.first_payload("eval_harness_config")
+        config = store.get(STORE_RUNCONFIG)
+        if actual:
+            config["prompt_sha256"] = _sha256_text(actual["system_prompt"])
+            config["summarization_prompt_sha256"] = _sha256_text(actual["summary_prompt"])
+            write_json(archive / "harness.json", actual)
+        store.set(STORE_RUNCONFIG, config)
+        write_json(archive / "runconfig.json", config)
         # Record the known answer so a later review can judge the result against
         # ground truth, the sharpest signal an eval run offers.
         if ground_truth:
             host.session.trace.append(EVAL_TARGET, {"expected": ground_truth})
         result = await _run_prompts(host.runner, prompt, follow_up_prompts)
     finally:
-        await host.aclose()
+        try:
+            memory = host.session._ephemeral_memory_dir
+            if memory is not None and memory.exists():
+                archive_tree(memory, Path(store.get(STORE_ARCHIVE)) / "memory")
+        finally:
+            await host.aclose()
 
     if result.interrupts:
         return "[eval-error] the turn paused for tool approval in auto mode"
@@ -279,23 +329,73 @@ def jutul_agent_solver(simulator: str = "jutuldarcy") -> Solver:
         fixtures = state.metadata.get("fixtures", {})
         needs_env = bool(state.metadata.get("needs_env", False))
         needs_display = bool(state.metadata.get("needs_display", False))
+        context_window = state.metadata.get("context_window")
+        if context_window is not None and (
+            not isinstance(context_window, int) or isinstance(context_window, bool)
+        ):
+            raise TypeError("sample metadata context_window must be an integer")
         follow_up_prompts = list(state.metadata.get("follow_up_prompts", []))
         sim = state.metadata.get("simulator", simulator)
+        from jutul_agent.agent.strategies import HarnessStrategies
+        from jutul_agent.eval.archive import capture_source, finish_archive, write_json
+        from jutul_agent.paths import state_home
+
+        strategies = HarnessStrategies(**(state.metadata.get("harness_strategies") or {}))
+        identifier = uuid.uuid4().hex
+        archive = state_home() / "eval-archives" / identifier
+        store = state.store
+        store.set(STORE_ARCHIVE, str(archive))
+        source_root = Path(__file__).resolve().parents[3]
+        if not (source_root / "src" / "jutul_agent").exists():
+            source_root = Path(__file__).resolve().parents[2]
+        source = await asyncio.to_thread(capture_source, source_root, state_home() / "eval-sources")
+        model = get_model()
+        write_json(
+            archive / "sample.json",
+            {
+                "sample_id": state.sample_id,
+                "epoch": state.epoch,
+                "input": state.input_text,
+                "target": state.target.text,
+                "metadata": state.metadata,
+                "source": source,
+                "model": model.name,
+                "generation": model.config.model_dump(exclude={"extra_headers"}),
+            },
+        )
         scratch = Path(tempfile.gettempdir()) / "jutul-agent-eval" / uuid.uuid4().hex[:8]
         scratch.mkdir(parents=True)
 
         agent_state = AgentState(messages=list(state.messages))
-        async with _SESSION_LOCK, agent_bridge(agent_state):
-            final = await _run_jutul_session(
-                simulator=sim,
-                prompt=state.input_text,
-                follow_up_prompts=follow_up_prompts,
-                fixtures=fixtures,
-                needs_env=needs_env,
-                needs_display=needs_display,
-                scratch=scratch,
-                store=state.store,
-                ground_truth=state.metadata.get("expected"),
+        outcome = "error"
+        try:
+            async with _SESSION_LOCK, agent_bridge(agent_state):
+                final = await _run_jutul_session(
+                    simulator=sim,
+                    prompt=state.input_text,
+                    follow_up_prompts=follow_up_prompts,
+                    fixtures=fixtures,
+                    needs_env=needs_env,
+                    needs_display=needs_display,
+                    context_window=context_window,
+                    harness_strategies=strategies,
+                    julia_project_override=state.metadata.get("julia_project"),
+                    scratch=scratch,
+                    store=state.store,
+                    ground_truth=state.metadata.get("expected"),
+                )
+            outcome = "returned"
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
+        finally:
+            trace_path = store.get(STORE_TRACE_DB)
+            write_json(archive / "execution.json", {"outcome": outcome})
+            await asyncio.to_thread(
+                finish_archive,
+                archive,
+                scratch / "workspace",
+                session_dir=Path(trace_path).parent if trace_path else None,
             )
 
         # The bridge tracked the real conversation; the completion graded by

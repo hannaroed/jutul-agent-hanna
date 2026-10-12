@@ -62,11 +62,32 @@ def _skill_hashes(adapter: Any) -> dict[str, str]:
     return hashes
 
 
-def build_runconfig(adapter: Any, *, julia_project: Path | None = None) -> dict[str, Any]:
+def build_runconfig(
+    adapter: Any,
+    *,
+    julia_project: Path | None = None,
+    context_window: int | None = None,
+    strategies: Any | None = None,
+) -> dict[str, Any]:
     """The attribution record for one eval run (JSON-serializable)."""
+    from deepagents.middleware.summarization import DEEPAGENTS_DEFAULT_SUMMARY_PROMPT
+
     from jutul_agent import __version__
     from jutul_agent.agent.prompts import assemble_session_prompt
+    from jutul_agent.agent.strategies import HarnessStrategies
+    from jutul_agent.agent.summarization import (
+        MESSAGE_HISTORY_SANITIZATION_POLICY,
+        SCIENTIFIC_SUMMARY_PROMPT,
+        SUMMARY_SANITIZATION_POLICY,
+    )
+    from jutul_agent.agent.tool_scheduling import TOOL_SCHEDULING_POLICY
 
+    strategies = strategies or HarnessStrategies()
+    summary_prompt = (
+        SCIENTIFIC_SUMMARY_PROMPT
+        if strategies.summarization == "scientific"
+        else DEEPAGENTS_DEFAULT_SUMMARY_PROMPT
+    )
     manifest = (julia_project / "Manifest.toml") if julia_project else None
     return {
         "jutul_agent": {
@@ -75,8 +96,21 @@ def build_runconfig(adapter: Any, *, julia_project: Path | None = None) -> dict[
             "dirty": bool(_git(["status", "--porcelain"]) or None),
         },
         "prompt_sha256": _sha256_text(assemble_session_prompt(adapter, open_windows=False)),
+        "summarization_prompt_sha256": _sha256_text(summary_prompt),
+        "summary_sanitization": SUMMARY_SANITIZATION_POLICY
+        if strategies.sanitize_history
+        else None,
+        "message_history_sanitization": MESSAGE_HISTORY_SANITIZATION_POLICY
+        if strategies.sanitize_history
+        else None,
+        "harness_strategies": strategies.to_dict(),
         "skills_sha256": _skill_hashes(adapter),
         "simulator": adapter.name,
+        "context_window": context_window,
+        "path_policy": "agent-visible-to-real-path-resolution-v1",
+        "tool_scheduling": TOOL_SCHEDULING_POLICY
+        if strategies.sequential_tools
+        else "provider-default",
         "manifest_sha256": (
             _sha256_file(manifest) if manifest is not None and manifest.exists() else None
         ),

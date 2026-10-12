@@ -25,6 +25,20 @@ def _tasks_dir() -> Path:
 _INSPECT_PROVIDERS = {"google_genai": "google"}
 
 
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
+def _nonnegative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be a non-negative integer")
+    return parsed
+
+
 def _default_inspect_model() -> str:
     """The agent's default model, in Inspect's ``provider/model`` form."""
     from jutul_agent.models import DEFAULT_MODEL
@@ -86,6 +100,29 @@ def build_parser(prog: str = "jutul-agent eval") -> argparse.ArgumentParser:
         default=1,
         help="Concurrent samples (default 1; the agent's workspace state is "
         "process-global, so higher values only interleave sessions).",
+    )
+    parser.add_argument(
+        "--continue-on-fail",
+        action="store_true",
+        help="Finish remaining samples after an error instead of cancelling the batch.",
+    )
+    parser.add_argument(
+        "--model-timeout",
+        type=_positive_int,
+        default=180,
+        help="Total retry budget in seconds for one model generation (default 180).",
+    )
+    parser.add_argument(
+        "--model-attempt-timeout",
+        type=_positive_int,
+        default=120,
+        help="Maximum seconds for one model request attempt (default 120).",
+    )
+    parser.add_argument(
+        "--model-max-retries",
+        type=_nonnegative_int,
+        default=2,
+        help="Transient model-request retries before failing the sample (default 2).",
     )
     parser.add_argument(
         "--limit",
@@ -179,8 +216,12 @@ def run(args: argparse.Namespace) -> int:
         model=model.split(","),
         epochs=epochs,
         max_samples=args.max_samples,
+        continue_on_fail=args.continue_on_fail,
         limit=args.limit,
         log_dir=str(log_dir),
+        timeout=args.model_timeout,
+        attempt_timeout=args.model_attempt_timeout,
+        max_retries=args.model_max_retries,
     )
     print(f"\nLogs: {log_dir} (view with `uv run inspect view --log-dir {log_dir}`)")
 

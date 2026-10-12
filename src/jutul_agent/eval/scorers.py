@@ -8,6 +8,9 @@ that should have run must appear as ``tool_call`` events in the session's
 
 from __future__ import annotations
 
+import csv
+import io
+import json
 import re
 from pathlib import Path
 
@@ -25,7 +28,14 @@ from inspect_ai.scorer import (
 from inspect_ai.solver import TaskState
 
 from jutul_agent.eval.solver import STORE_OUTPUT_DIR, STORE_TRACE_DB, STORE_WORKSPACE
-from jutul_agent.paths import is_host_path
+from jutul_agent.eval.trace_checks import (
+    campaign_calls,
+    case_coverage_problems,
+    finite_number,
+    result_succeeded,
+    tool_exchanges,
+)
+from jutul_agent.paths import is_host_path, resolve_in_workspace
 from jutul_agent.trace import Event, schema
 
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?")
@@ -67,6 +77,57 @@ def _trace_tool_calls(state: TaskState) -> list[str]:
         for event in _trace_events(state)
         if event.kind == schema.TOOL_CALL
     ]
+
+
+def _workspace_tool_path(state: TaskState, call: Event, key: str) -> str | None:
+    root = state.store.get(STORE_WORKSPACE)
+    raw = (call.payload.get("args") or {}).get(key)
+    if not root or not isinstance(raw, str):
+        return None
+    workspace = Path(root).resolve()
+    resolved = resolve_in_workspace(raw, workspace=workspace)
+    if resolved is None:
+        try:
+            resolved = Path(raw).resolve()
+            resolved.relative_to(workspace)
+        except (OSError, ValueError):
+            return None
+    return resolved.relative_to(workspace).as_posix()
+
+
+def _answer_object(text: str) -> dict | None:
+    """One JSON object; reject duplicate fields, non-finite values, and prose."""
+
+    def unique_fields(pairs):
+        values = dict(pairs)
+        if len(values) != len(pairs):
+            raise ValueError("duplicate answer fields")
+        return values
+
+    text = text.strip()
+    if text.startswith("```json\n") and text.endswith("\n```"):
+        text = text[8:-4]
+    try:
+        answer = json.loads(text, object_pairs_hook=unique_fields)
+    except (TypeError, ValueError):
+        return None
+    return answer if isinstance(answer, dict) else None
+
+
+@scorer(metrics=[accuracy()])
+def campaign_winner(expected: str) -> Scorer:
+    """Require the selected run ID in the final structured answer."""
+
+    async def score(state: TaskState, target: Target) -> Score:
+        truth = _answer_object(target.text) or {"run_id": expected}
+        answer = _answer_object(state.output.completion)
+        correct = answer is not None and answer.get("run_id") == truth["run_id"]
+        return Score(
+            value=CORRECT if correct else INCORRECT,
+            explanation=f"selected run_id must equal {truth['run_id']!r}",
+        )
+
+    return score
 
 
 @scorer(metrics=[accuracy()])
@@ -169,6 +230,93 @@ def julia_code_matches(pattern: str) -> Scorer:
                 if hits
                 else f"no run_julia/plot_julia code matched {pattern!r}"
             ),
+        )
+
+    return score
+
+
+@scorer(metrics=[accuracy()])
+def julia_case_call_coverage(
+    function: str,
+    cases: tuple[str, ...],
+    expected_counts: tuple[int, ...] | None = None,
+) -> Scorer:
+    """Require direct sequential attempts and one successful result per case."""
+    expected_counts = expected_counts if expected_counts is not None else (1,) * len(cases)
+    if len(expected_counts) != len(cases):
+        raise ValueError("expected_counts must have one entry per case")
+    if len(set(cases)) != len(cases) or any(count < 1 for count in expected_counts):
+        raise ValueError("cases must be unique and expected counts must be positive")
+    expected = dict(zip(cases, expected_counts, strict=True))
+
+    async def score(state: TaskState, target: Target) -> Score:
+        problems = case_coverage_problems(_trace_events(state), function, expected)
+        return Score(
+            value=INCORRECT if problems else CORRECT,
+            explanation="; ".join(problems) or "all cases completed once with sequential results",
+        )
+
+    return score
+
+
+@scorer(metrics=[accuracy()])
+def julia_case_recovered_from_ledger(
+    function: str,
+    case: str,
+    ledger: str = "campaign-index.csv",
+) -> Scorer:
+    """Require a failed attempt, successful checkpoint read, and successful retry."""
+
+    async def score(state: TaskState, target: Target) -> Score:
+        events = _trace_events(state)
+        calls, problems = campaign_calls(events, function)
+        attempts = [pair for argument, pair in calls if argument == case]
+        if len(attempts) != 2:
+            problems.append(f"expected two {case} calls, found {len(attempts)}")
+        else:
+            first, retry = attempts
+            if result_succeeded(first.result):
+                problems.append("first attempt did not fail")
+            if not result_succeeded(retry.result):
+                problems.append("retry did not succeed")
+            reads = [
+                pair
+                for pair in tool_exchanges(events)
+                if first.end < pair.start < pair.end < retry.start
+                and pair.call.payload.get("name") == "read_file"
+                and _workspace_tool_path(state, pair.call, "file_path") == ledger
+                and result_succeeded(pair.result)
+                and str(pair.result.payload.get("content", "")).strip()
+            ]
+            if not reads:
+                problems.append(f"no successful {ledger} read completed before retry")
+        return Score(
+            value=INCORRECT if problems else CORRECT,
+            explanation="; ".join(problems)
+            or f"{case} recovered after a successful checkpoint read",
+        )
+
+    return score
+
+
+@scorer(metrics=[accuracy()])
+def julia_function_call_count(function: str, expected: int) -> Scorer:
+    """Require exactly the budgeted direct sequential calls, all successful."""
+    if expected < 1:
+        raise ValueError("expected must be positive")
+
+    async def score(state: TaskState, target: Target) -> Score:
+        calls, problems = campaign_calls(_trace_events(state), function)
+        if len(calls) != expected:
+            problems.append(f"expected {expected} calls, found {len(calls)}")
+        if any(not result_succeeded(pair.result) for _, pair in calls):
+            problems.append("a campaign call failed")
+        arguments = [argument for argument, _ in calls]
+        if len(set(arguments)) != len(arguments):
+            problems.append("a campaign argument was repeated")
+        return Score(
+            value=INCORRECT if problems else CORRECT,
+            explanation="; ".join(problems) or f"{function} ran {expected} times sequentially",
         )
 
     return score
@@ -318,6 +466,60 @@ def numeric_close(expected: float, tol: float) -> Scorer:
         return Score(
             value=CORRECT if hits else INCORRECT,
             explanation=f"expected {expected}±{tol}; answer numbers: {values or 'none'}",
+        )
+
+    return score
+
+
+@scorer(metrics=[accuracy()])
+def numeric_values_close(
+    expected: tuple[float, ...],
+    tol: float | tuple[float, ...],
+    *,
+    fields: tuple[str, ...] | None = None,
+) -> Scorer:
+    """Check named quantities, or number presence when fields are omitted."""
+    tolerances = (tol,) * len(expected) if isinstance(tol, (int, float)) else tol
+    if len(tolerances) != len(expected):
+        raise ValueError("tol must be a scalar or have one entry per expected value")
+    if any(not finite_number(value) for value in expected) or any(
+        not finite_number(value) or value < 0 for value in tolerances
+    ):
+        raise ValueError("expected values and nonnegative tolerances must be finite")
+    if fields is not None and (len(fields) != len(expected) or len(set(fields)) != len(fields)):
+        raise ValueError("fields must have one unique name per expected value")
+
+    async def score(state: TaskState, target: Target) -> Score:
+        if fields is not None:
+            answer = _answer_object(state.output.completion)
+            target_object = _answer_object(target.text)
+            truth = target_object or dict(zip(fields, expected, strict=True))
+            problems = []
+            if target_object is not None and (answer is None or set(answer) != set(truth)):
+                problems.append("final answer must contain exactly the target field names")
+            for field, tolerance in zip(fields, tolerances, strict=True):
+                got = answer.get(field) if answer is not None else None
+                want = truth.get(field)
+                if not finite_number(got) or not finite_number(want) or abs(got - want) > tolerance:
+                    problems.append(f"{field}: expected {want} ±{tolerance}, got {got}")
+            return Score(
+                value=INCORRECT if problems else CORRECT,
+                explanation="; ".join(problems) or "all named quantities match",
+            )
+        values = _answer_numbers(state.output.completion)
+        missing = [
+            (want, tolerance)
+            for want, tolerance in zip(expected, tolerances, strict=True)
+            if not any(abs(got - want) <= tolerance for got in values)
+        ]
+        contract = list(zip(expected, tolerances, strict=True))
+        return Score(
+            value=CORRECT if not missing else INCORRECT,
+            explanation=(
+                f"found values within expected tolerances: {contract}"
+                if not missing
+                else f"missing (value, tolerance) {missing}; answer numbers: {values or 'none'}"
+            ),
         )
 
     return score
@@ -498,6 +700,147 @@ def used_any_tool(options: list[str]) -> Scorer:
 
 
 @scorer(metrics=[accuracy()])
+def tool_result_numeric_evidence(
+    expected: tuple[float, ...],
+    tol: float,
+    *,
+    tools: tuple[str, ...] = ("read_file", "grep"),
+    required_text: tuple[str, ...] = (),
+    csv_columns: tuple[str, ...] | None = None,
+    value_columns: tuple[str, ...] | None = None,
+    answer_fields: tuple[str, ...] | None = None,
+    artifact: str | None = None,
+    row_key: dict[str, str] | None = None,
+) -> Scorer:
+    """Require successful, paired retrieval; optionally validate an exact CSV row."""
+    if csv_columns is not None and (
+        value_columns is None
+        or len(value_columns) != len(expected)
+        or artifact is None
+        or row_key is None
+    ):
+        raise ValueError("CSV evidence needs value_columns, artifact, and row_key")
+    if answer_fields is not None and len(answer_fields) != len(expected):
+        raise ValueError("answer_fields must have one name per expected value")
+
+    async def score(state: TaskState, target: Target) -> Score:
+        truth = _answer_object(target.text) or {}
+        selected = truth.get("run_id")
+        selected_artifact = f"results/{selected}.csv" if selected is not None else artifact
+        keys = {**(row_key or {})}
+        if selected is not None and "run_id" in keys:
+            keys["run_id"] = selected
+        metadata = getattr(state, "metadata", {}) or {}
+        if "cell_id" in keys:
+            keys["cell_id"] = str(metadata.get("query_cell_id", keys["cell_id"]))
+        wants = (
+            tuple(
+                truth.get(field, want)
+                for field, want in zip(answer_fields or value_columns or (), expected, strict=True)
+            )
+            if value_columns is not None
+            else expected
+        )
+        canonical_rows = []
+        if csv_columns is not None:
+            root = state.store.get(STORE_WORKSPACE)
+            if not root:
+                return Score(value=INCORRECT, explanation="workspace unavailable")
+            path = Path(root) / str(selected_artifact)
+            try:
+                with path.open(encoding="utf-8", newline="") as stream:
+                    reader = csv.DictReader(stream)
+                    if tuple(reader.fieldnames or ()) != csv_columns:
+                        return Score(value=INCORRECT, explanation="artifact CSV schema mismatch")
+                    canonical_rows = [
+                        row
+                        for row in reader
+                        if all(row.get(key) == value for key, value in keys.items())
+                    ]
+            except (OSError, csv.Error):
+                return Score(value=INCORRECT, explanation="artifact unavailable")
+            if len(canonical_rows) != 1:
+                return Score(value=INCORRECT, explanation="artifact row missing or ambiguous")
+
+        for pair in tool_exchanges(_trace_events(state)):
+            name = pair.call.payload.get("name")
+            if name not in tools or not result_succeeded(pair.result):
+                continue
+            content = str(pair.result.payload.get("content", ""))
+            if csv_columns is None:
+                if all(fragment in content for fragment in required_text):
+                    numbers = _answer_numbers(content)
+                    if all(any(abs(got - want) <= tol for got in numbers) for want in wants):
+                        return Score(value=CORRECT, explanation=f"successful {name} exposed values")
+                continue
+            key = "path" if name == "grep" else "file_path"
+            if _workspace_tool_path(state, pair.call, key) != selected_artifact:
+                continue
+            for line in content.splitlines():
+                line = re.sub(r"^\s*\d+:\s*", "", line)
+                try:
+                    cells = next(csv.reader(io.StringIO(line), strict=True))
+                    if len(cells) != len(csv_columns):
+                        continue
+                    row = dict(zip(csv_columns, cells, strict=True))
+                    if row != canonical_rows[0]:
+                        continue
+                    values = [float(row[field]) for field in value_columns or ()]
+                except (csv.Error, ValueError, KeyError, StopIteration):
+                    continue
+                if all(
+                    finite_number(got) and abs(got - want) <= tol
+                    for got, want in zip(values, wants, strict=True)
+                ):
+                    return Score(
+                        value=CORRECT, explanation=f"successful {name} exposed exact artifact row"
+                    )
+        return Score(
+            value=INCORRECT,
+            explanation="no successful retrieval exposed the required artifact row/values",
+        )
+
+    return score
+
+
+@scorer(metrics=[mean(), stderr()])
+def tool_result_character_count(tools: tuple[str, ...] | None = None) -> Scorer:
+    """Count tool-result characters, optionally restricted to named tools."""
+
+    async def score(state: TaskState, target: Target) -> Score:
+        total = 0
+        sources: list[str] = []
+        for event in _trace_events(state):
+            if event.kind != schema.TOOL_RESULT:
+                continue
+            name = str(event.payload.get("name", ""))
+            if tools is not None and name not in tools:
+                continue
+            total += len(str(event.payload.get("content", "")))
+            sources.append(name)
+        scope = f" from {sources}" if sources else ""
+        return Score(value=total, explanation=f"{total} tool-result characters{scope}")
+
+    return score
+
+
+def _workspace_files(state: TaskState, pattern: str, min_size: int) -> list[str]:
+    """Workspace-relative matches that meet the file scorers' size requirement."""
+    root = state.store.get(STORE_WORKSPACE)
+    if not root:
+        return []
+    base = Path(root)
+    matches: list[str] = []
+    for file in base.glob(pattern):
+        try:
+            if file.is_file() and file.stat().st_size >= min_size:
+                matches.append(file.relative_to(base).as_posix())
+        except OSError:
+            continue
+    return sorted(matches)
+
+
+@scorer(metrics=[accuracy()])
 def workspace_file_exists(pattern: str, *, min_size: int = 1) -> Scorer:
     """Pass when a non-empty file matching ``pattern`` exists in the workspace.
 
@@ -510,23 +853,28 @@ def workspace_file_exists(pattern: str, *, min_size: int = 1) -> Scorer:
     """
 
     async def score(state: TaskState, target: Target) -> Score:
-        root = state.store.get(STORE_WORKSPACE)
-        matches: list[str] = []
-        if root:
-            base = Path(root)
-            for file in base.glob(pattern):
-                try:
-                    if file.is_file() and file.stat().st_size >= min_size:
-                        matches.append(file.relative_to(base).as_posix())
-                except OSError:
-                    continue
+        matches = _workspace_files(state, pattern, min_size)
         return Score(
             value=CORRECT if matches else INCORRECT,
             explanation=(
-                f"workspace files matching {pattern!r}: {sorted(matches)}"
+                f"workspace files matching {pattern!r}: {matches}"
                 if matches
                 else f"no non-empty workspace file matched {pattern!r}"
             ),
+        )
+
+    return score
+
+
+@scorer(metrics=[accuracy()])
+def workspace_file_count(pattern: str, expected: int, *, min_size: int = 1) -> Scorer:
+    """Pass when exactly ``expected`` non-empty workspace files match ``pattern``."""
+
+    async def score(state: TaskState, target: Target) -> Score:
+        matches = _workspace_files(state, pattern, min_size)
+        return Score(
+            value=CORRECT if len(matches) == expected else INCORRECT,
+            explanation=f"expected {expected} files matching {pattern!r}: {matches}",
         )
 
     return score
@@ -644,16 +992,7 @@ _PROBE = re.compile(
 
 def _trace_tool_call_payloads(state: TaskState) -> list[dict]:
     """Every recorded ``tool_call`` payload in this sample's session trace."""
-    from jutul_agent.trace import TraceLog
-
-    path = state.store.get(STORE_TRACE_DB)
-    if not path or not Path(path).exists():
-        return []
-    log = TraceLog(Path(path))
-    try:
-        return [event.payload for event in log.iter_events() if event.kind == schema.TOOL_CALL]
-    finally:
-        log.close()
+    return [event.payload for event in _trace_events(state) if event.kind == schema.TOOL_CALL]
 
 
 @scorer(metrics=[mean(), stderr()])
@@ -686,6 +1025,17 @@ def file_op_count(
     async def score(state: TaskState, target: Target) -> Score:
         count = sum(1 for name in _trace_tool_calls(state) if name in tools)
         return Score(value=count, explanation=f"{count} file/search tool calls")
+
+    return score
+
+
+@scorer(metrics=[mean(), stderr()])
+def context_compaction_count() -> Scorer:
+    """How many automatic or manual context compactions the trace records."""
+
+    async def score(state: TaskState, target: Target) -> Score:
+        count = sum(1 for event in _trace_events(state) if event.kind == schema.CONTEXT_COMPACTION)
+        return Score(value=count, explanation=f"{count} context compactions")
 
     return score
 

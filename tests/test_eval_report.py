@@ -6,7 +6,14 @@ import pytest
 
 pytest.importorskip("inspect_ai", reason="eval extra not installed")
 
-from jutul_agent.eval.report import PRICES, SampleRecord, _classify, _price, render_markdown
+from jutul_agent.eval.log_values import numeric_score
+from jutul_agent.eval.report import (
+    PRICES,
+    SampleRecord,
+    _classify,
+    _price,
+    render_markdown,
+)
 
 
 def test_classify_ignores_numeric_efficiency_scorers() -> None:
@@ -24,6 +31,28 @@ def test_classify_ignores_numeric_efficiency_scorers() -> None:
     verdict, _category, failed = _classify(ok, {"numeric_close": "I", "tool_call_count": "9.0"})
     assert verdict == "fail"
     assert failed == ["numeric_close"]
+
+
+def test_numeric_score_reads_trace_efficiency_values() -> None:
+    from types import SimpleNamespace
+
+    sample = SimpleNamespace(
+        scores={
+            "tool_call_count": SimpleNamespace(value=8),
+            "answer_cites": SimpleNamespace(value="C"),
+        }
+    )
+    assert numeric_score(sample, "tool_call_count") == 8
+    assert numeric_score(sample, "answer_cites") is None
+    assert numeric_score(sample, "missing") is None
+
+
+@pytest.mark.parametrize("value", [True, False, float("inf"), float("-inf"), float("nan")])
+def test_numeric_score_ignores_invalid_counts(value) -> None:
+    from types import SimpleNamespace
+
+    sample = SimpleNamespace(scores={"tool_call_count": SimpleNamespace(value=value)})
+    assert numeric_score(sample, "tool_call_count") is None
 
 
 def _record(**overrides) -> SampleRecord:
@@ -44,6 +73,10 @@ def _record(**overrides) -> SampleRecord:
         wall_s=240.0,
         messages=12,
         commit="4b9ab20",
+        tool_calls=8,
+        file_ops=2,
+        compactions=2,
+        filesystem_result_chars=1198,
     )
     base.update(overrides)
     return SampleRecord(**base)
@@ -64,6 +97,8 @@ def test_render_has_overview_suite_and_simulator_sections() -> None:
     assert "## Overview" in page
     assert "## By suite" in page
     assert "## By simulator" in page
+    assert "Compactions / run" in page
+    assert "FS result chars" in page
     # Status is carried by coloured spans, with the per-sample failure
     # category shown in the detail table.
     assert 'class="bench-pass"' in page

@@ -32,6 +32,7 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from jutul_agent.eval.log_values import numeric_score
 from jutul_agent.paths import state_home
 
 # Prices in USD per million tokens, last reconciled on PRICES_AS_OF against
@@ -78,6 +79,9 @@ class SampleRecord:
     commit: str
     epoch: int = 1  # which repetition of the sample this run is
     tool_calls: int = 0  # tool calls the agent made this run (harness efficiency)
+    file_ops: int | None = None
+    compactions: int | None = None
+    filesystem_result_chars: int | None = None
 
 
 def _model_short(model: str) -> str:
@@ -163,7 +167,12 @@ def collect(prefixes: str | list[str], log_dir: Path | None = None) -> list[Samp
                 usage["out"] += mu.output_tokens or 0
                 usage["cr"] += mu.input_tokens_cache_read or 0
                 usage["cw"] += mu.input_tokens_cache_write or 0
-            tool_calls = sum(len(getattr(m, "tool_calls", None) or []) for m in (s.messages or []))
+            # Use trace counts: compaction removes calls from the final history.
+            tool_calls = numeric_score(s, "tool_call_count")
+            if tool_calls is None:
+                tool_calls = sum(
+                    len(getattr(m, "tool_calls", None) or []) for m in (s.messages or [])
+                )
             scores = {k: str(v.value) for k, v in (s.scores or {}).items()}
             verdict, category, failed = _classify(s, scores)
             runconfig = (s.store or {}).get("jutul/runconfig") or {}
@@ -193,6 +202,9 @@ def collect(prefixes: str | list[str], log_dir: Path | None = None) -> list[Samp
                 commit=commit,
                 epoch=getattr(s, "epoch", 1) or 1,
                 tool_calls=tool_calls,
+                file_ops=numeric_score(s, "file_op_count"),
+                compactions=numeric_score(s, "context_compaction_count"),
+                filesystem_result_chars=numeric_score(s, "tool_result_character_count"),
             )
             records.append(record)
     return _dedupe(records)
@@ -314,15 +326,17 @@ def render_markdown(records: list[SampleRecord]) -> str:
         "model is priced against a hosted reference.\n\n"
     )
     w(
-        "| Model | Pass rate | Tool calls / run | Input tokens / run | "
-        "Output tokens / run | Cost / run | Wall / run |\n"
+        "| Model | Pass rate | Tool calls / run | File ops / run | Compactions / run | "
+        "Input tokens / run | Output tokens / run | Cost / run | Wall / run |\n"
     )
-    w("|---|---|---|---|---|---|---|\n")
+    w("|---|---|---|---|---|---|---|---|---|\n")
     for m in models:
         rs = [r for r in records if r.model == m]
         done = [r for r in rs if r.verdict != "infra"]
         passed = sum(r.verdict == "pass" for r in done)
         calls_run = _per_run_total(rs, "tool_calls")
+        file_ops_run = _per_run_total(rs, "file_ops")
+        compactions_run = _per_run_total(rs, "compactions")
         # Input is everything fed to the model (fresh input + cache reads +
         # cache writes). The cache-read share is annotated because it is billed
         # at a fraction of the input price, so a heavily cached model processes a
@@ -336,6 +350,8 @@ def render_markdown(records: list[SampleRecord]) -> str:
         cost_run = _per_run_total(rs, "cost_usd")
         wall_run = _per_run_total(rs, "wall_s")
         calls = f"{calls_run:.0f}" if calls_run is not None else "—"
+        file_ops = f"{file_ops_run:.0f}" if file_ops_run is not None else "—"
+        compactions = f"{compactions_run:.0f}" if compactions_run is not None else "—"
         input_tok = _humanize_tokens(input_run) if input_run else "—"
         if cached_run:
             input_tok += f" ({_humanize_tokens(cached_run)} cached, {cached_run / input_run:.0%})"
@@ -343,8 +359,8 @@ def render_markdown(records: list[SampleRecord]) -> str:
         cost = f"${cost_run:.2f}" if cost_run is not None else "—"
         wall = f"{wall_run / 3600:.1f} h" if wall_run else "—"
         w(
-            f"| {short[m]} | {_frac(passed, len(done))} | {calls} | {input_tok} | "
-            f"{output_tok} | {cost} | {wall} |\n"
+            f"| {short[m]} | {_frac(passed, len(done))} | {calls} | {file_ops} | "
+            f"{compactions} | {input_tok} | {output_tok} | {cost} | {wall} |\n"
         )
     w("\n")
 
@@ -368,9 +384,9 @@ def render_markdown(records: list[SampleRecord]) -> str:
     )
     w(
         "| Suite | Sample | Sim | Model | Passed | Failures | "
-        "Tool calls | Input | Output | Cost | Wall |\n"
+        "Tool calls | File ops | Compactions | FS result chars | Input | Output | Cost | Wall |\n"
     )
-    w("|---|---|---|---|---|---|---|---|---|---|---|\n")
+    w("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
     keyed = sorted(
         {(r.task, r.sample, r.model) for r in records},
         key=lambda k: (_suite(k[0]), k[1], _model_sort_key(k[2])),
@@ -387,6 +403,9 @@ def render_markdown(records: list[SampleRecord]) -> str:
             ", ".join(fails) + (f"; {infra} infra" if infra else "") if (fails or infra) else "—"
         )
         calls_run = _per_run_total(rs, "tool_calls")
+        file_ops_run = _per_run_total(rs, "file_ops")
+        compactions_run = _per_run_total(rs, "compactions")
+        filesystem_chars_run = _per_run_total(rs, "filesystem_result_chars")
         input_run = sum(
             _per_run_total(rs, attr) or 0
             for attr in ("tokens_in", "tokens_cache_read", "tokens_cache_write")
@@ -395,6 +414,11 @@ def render_markdown(records: list[SampleRecord]) -> str:
         cost_run = _per_run_total(rs, "cost_usd")
         wall_run = _per_run_total(rs, "wall_s")
         calls = f"{calls_run:.0f}" if calls_run is not None else "—"
+        file_ops = f"{file_ops_run:.0f}" if file_ops_run is not None else "—"
+        compactions = f"{compactions_run:.0f}" if compactions_run is not None else "—"
+        filesystem_chars = (
+            f"{filesystem_chars_run:.0f}" if filesystem_chars_run is not None else "—"
+        )
         input_tok = _humanize_tokens(input_run) if input_run else "—"
         output_tok = _humanize_tokens(output_run) if output_run else "—"
         cost = f"${cost_run:.2f}" if cost_run is not None else "—"
@@ -402,7 +426,8 @@ def render_markdown(records: list[SampleRecord]) -> str:
         w(
             f"| {_suite(task)} | `{sample}` | {rs[0].simulator or 'general'} | "
             f"{short[model]} | {_frac(passed, len(done))} | {notes} | "
-            f"{calls} | {input_tok} | {output_tok} | {cost} | {wall} |\n"
+            f"{calls} | {file_ops} | {compactions} | {filesystem_chars} | {input_tok} | "
+            f"{output_tok} | {cost} | {wall} |\n"
         )
     w("\n</details>\n\n")
 
