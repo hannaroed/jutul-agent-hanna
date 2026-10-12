@@ -112,7 +112,9 @@ def resolve_in_workspace(raw: str | Path, *, workspace: Path | None = None) -> P
             return None  # a real machine path outside the workspace
 
     rel = text.lstrip("/")
-    if rel.startswith("workspace/"):
+    if rel == "workspace":
+        rel = ""
+    elif rel.startswith("workspace/"):
         rel = rel[len("workspace/") :]
     candidate = ws / rel
     try:

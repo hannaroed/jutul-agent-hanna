@@ -17,10 +17,13 @@ from deepagents.backends.protocol import (
     EditResult,
     ExecuteResponse,
     GlobResult,
+    GrepResult,
+    ReadResult,
     WriteResult,
 )
 
 from jutul_agent.agent.windows_paths import split_windows_glob
+from jutul_agent.paths import resolve_in_workspace
 
 _BLOCKED_INTERPRETERS = frozenset({"julia"})
 
@@ -107,6 +110,60 @@ class WorkspaceShellBackend(LocalShellBackend):
         super().__init__(*args, **kwargs)
         self._readonly_roots = tuple(Path(root).resolve() for root in readonly_roots)
 
+    def _agent_path(self, raw: str) -> str:
+        """Resolve workspace aliases and preserve real host paths."""
+        workspace = Path(self.cwd).resolve()
+        resolved = resolve_in_workspace(raw, workspace=workspace)
+        if resolved is not None:
+            return str(resolved)
+
+        # Recover a dropped workspace component only if the host path is missing.
+        path = Path(raw)
+        if path.is_absolute():
+            try:
+                relative = path.resolve().relative_to(workspace.parent)
+                candidate = (workspace / relative).resolve()
+                candidate.relative_to(workspace)
+                if not path.exists() and candidate.exists():
+                    return str(candidate)
+            except (OSError, RuntimeError, ValueError):
+                pass
+        return raw
+
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        return super().read(self._agent_path(file_path), offset=offset, limit=limit)
+
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+        *,
+        max_count: int | None = None,
+        **kwargs,
+    ) -> GrepResult:
+        if path is not None:
+            path = self._agent_path(path)
+            # Ignore redundant file globs; keep traversal checks upstream.
+            if glob is not None and ".." not in Path(glob).parts:
+                try:
+                    if Path(path).is_file():
+                        glob = None
+                except (OSError, RuntimeError, ValueError):
+                    pass
+        return super().grep(
+            pattern,
+            path=path,
+            glob=glob,
+            max_count=max_count,
+            **kwargs,
+        )
+
+    def glob(self, pattern: str, path: str | None = None, **kwargs) -> GlobResult:
+        if path is not None:
+            path = self._agent_path(path)
+        return super().glob(pattern, path=path, **kwargs)
+
     def _readonly_reason(self, file_path: str) -> str | None:
         """Corrective message if ``file_path`` lands inside a read-only root, else ``None``."""
         if not self._readonly_roots:
@@ -123,6 +180,7 @@ class WorkspaceShellBackend(LocalShellBackend):
         return None
 
     def write(self, file_path: str, content: str) -> WriteResult:
+        file_path = self._agent_path(file_path)
         reason = self._readonly_reason(file_path)
         if reason is not None:
             return WriteResult(error=reason)
@@ -135,6 +193,7 @@ class WorkspaceShellBackend(LocalShellBackend):
         new_string: str,
         replace_all: bool = False,
     ) -> EditResult:
+        file_path = self._agent_path(file_path)
         reason = self._readonly_reason(file_path)
         if reason is not None:
             return EditResult(error=reason)
@@ -144,6 +203,7 @@ class WorkspaceShellBackend(LocalShellBackend):
         # Deleting a directory removes it recursively, so the depot guard matters
         # here more than for write/edit: one call could take out a package's
         # whole source tree.
+        file_path = self._agent_path(file_path)
         reason = self._readonly_reason(file_path)
         if reason is not None:
             return DeleteResult(error=reason)

@@ -46,6 +46,87 @@ def test_workspace_backend_nests_relative_subdirs(tmp_path: Path) -> None:
     assert (ws / "sub" / "dir" / "a.jl").read_text() == "y = 2\n"
 
 
+def test_workspace_backend_resolves_middleware_and_workspace_virtual_paths(tmp_path: Path) -> None:
+    ws = tmp_path.resolve()
+    backend = WorkspaceShellBackend(root_dir=ws, virtual_mode=False, inherit_env=True)
+    (ws / "campaign-index.csv").write_text("run_id,value\nrun-falcon,0.5\n", encoding="utf-8")
+    results = ws / "results"
+    results.mkdir()
+    (results / "run-falcon.csv").write_text(
+        "run_id,cell_id,value\nrun-falcon,150,0.4751061563590662\n",
+        encoding="utf-8",
+    )
+
+    for path in ("campaign-index.csv", "/campaign-index.csv", "/workspace/campaign-index.csv"):
+        read = backend.read(path)
+        assert read.error is None
+        assert "run-falcon" in read.file_data["content"]
+
+    # FilesystemMiddleware turns the model's relative `results/...` into
+    # `/results/...` before invoking the real-path backend.
+    grep = backend.grep(",150,", path="/results/run-falcon.csv")
+    assert grep.error is None
+    assert grep.matches
+
+    glob = backend.glob("*.csv", path="/workspace")
+    assert glob.error is None
+    assert any(match["path"].endswith("campaign-index.csv") for match in glob.matches or [])
+
+
+def test_grep_exact_file_ignores_a_redundant_matching_glob(tmp_path: Path) -> None:
+    """An exact-file search must survive a model's redundant include glob."""
+    results = tmp_path / "results"
+    results.mkdir()
+    artifact = results / "run-falcon.csv"
+    artifact.write_text(
+        "run_id,cell_id,value\nrun-falcon,150,0.4751061563590662\n",
+        encoding="utf-8",
+    )
+    backend = WorkspaceShellBackend(root_dir=tmp_path, virtual_mode=False, inherit_env=True)
+
+    hit = backend.grep(
+        ",150,",
+        path="/results/run-falcon.csv",
+        glob="results/*.csv",
+        max_count=1,
+    )
+    assert hit.error is None
+    assert hit.matches
+    assert hit.matches[0]["text"].endswith(",150,0.4751061563590662")
+
+    # Include globs filter directory searches; an exact file path already made
+    # that selection, matching the backend's documented single-file behavior.
+    hit_with_other_glob = backend.grep(",150,", path="/results/run-falcon.csv", glob="*.json")
+    assert hit_with_other_glob.error is None
+    assert hit_with_other_glob.matches
+
+
+def test_workspace_backend_recovers_missing_workspace_path_component(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    results = workspace / "results"
+    results.mkdir(parents=True)
+    ledger = workspace / "campaign-index.csv"
+    ledger.write_text("run_id,artifact_path\nrun-falcon,results/run-falcon.csv\n")
+    artifact = results / "run-falcon.csv"
+    artifact.write_text("run-falcon,150,0.4751061563590662\n")
+    backend = WorkspaceShellBackend(root_dir=workspace, virtual_mode=False, inherit_env=True)
+
+    # A compacted summary dropped the real path's final `workspace/` segment.
+    recovered = backend.read(str(tmp_path / "campaign-index.csv"))
+    assert recovered.error is None
+    assert "run-falcon" in recovered.file_data["content"]
+    nested = backend.grep(",150,", path=str(tmp_path / "results" / "run-falcon.csv"))
+    assert nested.error is None
+    assert nested.matches
+
+    # An existing real sibling is intentional and must win over recovery.
+    sibling = tmp_path / "campaign-index.csv"
+    sibling.write_text("sibling-content\n", encoding="utf-8")
+    preserved = backend.read(str(sibling))
+    assert preserved.error is None
+    assert preserved.file_data["content"] == "sibling-content\n"
+
+
 def test_workspace_backend_absolute_path_writes_the_real_file(tmp_path: Path) -> None:
     # In real-path mode an absolute path is honored as itself (no workspace-only
     # restriction, no phantom): the file tools behave like the real filesystem,

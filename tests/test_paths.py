@@ -66,6 +66,7 @@ def test_resolve_in_workspace_handles_virtual_paths(tmp_path: Path) -> None:
     assert (
         resolve_in_workspace("/workspace/experiments/report.html") == ws / "experiments/report.html"
     )
+    assert resolve_in_workspace("/workspace") == ws
 
     # Real absolute paths inside the workspace are preserved.
     inside = ws / "x" / "y.html"
