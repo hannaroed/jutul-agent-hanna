@@ -1,7 +1,0 @@
-condition,n,interaction,winner_or_decision_correct,numerical_report_correct,grounded_row_evidence,protocol_or_core_design,strict_end_to_end,notes
-scientific-state-compaction,3,human-stepped,3/3,1/3,1/3,NA,0/3,"All six simulations completed; numeric and evidence successes occurred in different trials"
-structured-ledger,3,human-stepped,3/3,0/3,3/3,NA,0/3,"Ledger stabilized provenance but did not fix answer precision"
-targeted-retrieval-stable-locators,3,human-stepped,3/3,3/3,3/3,NA,3/3,"Best replicated retrieval condition"
-autonomous-campaign-replicated,3,single-prompt,3/3,0/3,3/3,2/3,0/3,"All produced six files; one trial violated the exact call/retrieval protocol; separate earlier pilot passed all criteria"
-fault-recovery,2,single-prompt,2/2,0/2,1/2,0/2,0/2,"One campaign completed; neither trial read the durable ledger between injected failure and retry"
-adaptive-design,3,single-prompt,2/3,1/3,2/3,2/3,1/3,"One full pass; one correct boundary with precision/evidence-isolation violations; one reasoning-budget no-action failure"

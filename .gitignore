@@ -49,6 +49,9 @@ Thumbs.db
 site/
 
 # Local scratch / lab output
-.jutul-review/
 lab-out/
 testbed/
+output/experiments/
+
+# Local history; active research uses eval/comparisons.py.
+archive/
