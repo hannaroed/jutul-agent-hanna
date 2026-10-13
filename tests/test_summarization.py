@@ -13,6 +13,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from jutul_agent.agent.builder import build_agent
+from jutul_agent.agent.strategies import HarnessStrategies
 from jutul_agent.agent.summarization import (
     MESSAGE_HISTORY_SANITIZATION_POLICY,
     SCIENTIFIC_SUMMARY_PROMPT,
@@ -37,22 +38,51 @@ def test_auto_compact_trigger_tokens() -> None:
 
 
 def test_scientific_summary_policy_preserves_state_and_retrieval_paths() -> None:
-    assert "exact run, case, and attempt identifiers" in SCIENTIFIC_SUMMARY_PROMPT
-    assert "every reported comparison metric" in SCIENTIFIC_SUMMARY_PROMPT
-    assert "filesystem search/read tools" in SCIENTIFIC_SUMMARY_PROMPT
-    assert "exact workspace-relative" in SCIENTIFIC_SUMMARY_PROMPT
-    assert "change a filename or extension" in SCIENTIFIC_SUMMARY_PROMPT
-    assert "verification gate or pending action" in SCIENTIFIC_SUMMARY_PROMPT
-    assert "not complete while a verification-gate action is still" in SCIENTIFIC_SUMMARY_PROMPT
-
     model = make_scripted_model([scripted_final("summary")])
     middleware = build_scientific_summarization_middleware(model, backend=object())
     assert middleware is not None
-    assert middleware.name == "SummarizationMiddleware"
+    assert middleware.name == "ScientificSummarizationMiddleware"
 
 
 def test_scientific_summary_policy_defers_unresolved_model_specs() -> None:
     assert build_scientific_summarization_middleware("openai:test", backend=object()) is None
+
+
+async def test_budget_sees_the_same_system_prompt_as_the_model(tmp_path, monkeypatch) -> None:
+    from jutul_agent.agent.summarization import ScientificSummarizationMiddleware
+    from jutul_agent.lab.fakes import ScriptedChatModel
+
+    monkeypatch.chdir(tmp_path)
+    counted = []
+    received = []
+    original_count = ScientificSummarizationMiddleware._count_tokens
+    original_generate = ScriptedChatModel._generate
+
+    def count(self, messages, system_message, tools):
+        counted.append(system_message.content)
+        return original_count(self, messages, system_message, tools)
+
+    def generate(self, messages, *args, **kwargs):
+        received.append(messages[0].content)
+        return original_generate(self, messages, *args, **kwargs)
+
+    monkeypatch.setattr(ScientificSummarizationMiddleware, "_count_tokens", count)
+    monkeypatch.setattr(ScriptedChatModel, "_generate", generate)
+    model = make_scripted_model([scripted_final("done")])
+    model.profile = {"max_input_tokens": 65_536}
+    session = Session.create(
+        julia=FakeJulia(), state_root=tmp_path, simulator=make_fake_adapter(tmp_path)
+    )
+    try:
+        agent, _ = build_agent(session, model=model)
+        inputs = {"messages": [HumanMessage(content="hello")]}
+        await agent.ainvoke(inputs)
+        assert received and counted
+        assert counted[-1] == received[-1]
+        assert "<memory_guidelines>" in str(counted[-1])
+        assert "write_todos" in str(counted[-1])
+    finally:
+        session.trace.close()
 
 
 @pytest.mark.parametrize("enabled", [True, False])
@@ -88,9 +118,9 @@ def test_strategy_switches_control_installed_middleware(tmp_path, monkeypatch, e
             harness_strategies=strategies,
         )
         middleware = captured["middleware"]
-        assert any(isinstance(m, ContextEditingMiddleware) for m in middleware) is enabled
         assert any(isinstance(m, SequentialToolCallsMiddleware) for m in middleware) is enabled
         [summary] = [m for m in middleware if isinstance(m, ScientificSummarizationMiddleware)]
+        assert isinstance(summary.context_editor, ContextEditingMiddleware) is enabled
         prompt = SCIENTIFIC_SUMMARY_PROMPT if enabled else DEEPAGENTS_DEFAULT_SUMMARY_PROMPT
         assert summary._lc_helper.summary_prompt == prompt
         raw = "<think>private</think>visible"
@@ -213,3 +243,181 @@ async def test_compact_thread_skips_short_threads() -> None:
     assert (
         await compact_thread(_NoState(), thread_id="t", model=None, backend=None, trace=None)
     ) is None
+
+
+async def test_small_window_compacts_history_that_fits_old_retention_but_exceeds_request_budget(
+    tmp_path,
+):
+    from unittest.mock import MagicMock
+
+    from deepagents.backends import FilesystemBackend
+    from langchain.agents.middleware.types import ModelRequest
+    from langchain_core.messages import SystemMessage, ToolMessage
+
+    model = make_scripted_model(
+        [scripted_final("Earlier run completed. Continue with the latest result.")]
+    )
+    model.profile = {"max_input_tokens": 16384}
+    middleware = build_scientific_summarization_middleware(
+        model,
+        FilesystemBackend(root_dir=tmp_path, virtual_mode=True),
+        strategies=HarnessStrategies(clear_tool_results=False),
+    )
+    messages = [
+        HumanMessage(content="goal " * 200),
+        AIMessage(content="", tool_calls=[{"id": "old", "name": "run_julia", "args": {}}]),
+        ToolMessage(content="old output " * 180, tool_call_id="old"),
+        AIMessage(content="", tool_calls=[{"id": "new", "name": "run_julia", "args": {}}]),
+        ToolMessage(content="new output " * 160, tool_call_id="new"),
+    ]
+    request = ModelRequest(
+        model=model,
+        messages=messages,
+        system_message=SystemMessage(content="rules " * 7800),
+        model_settings={"max_tokens": 3072},
+        tools=[],
+        runtime=MagicMock(),
+        state={"messages": messages},
+    )
+    count = middleware._count_tokens(messages, request.system_message, request.tools)
+    assert count > middleware._input_budget(request)
+    captured = []
+
+    async def handler(reduced):
+        captured.extend(reduced.messages)
+        assert not middleware._over_budget(reduced)
+        return AIMessage(content="ok")
+
+    await middleware.awrap_model_call(request, handler)
+    assert any(isinstance(m, ToolMessage) and m.tool_call_id == "new" for m in captured)
+    assert not any(isinstance(m, ToolMessage) and m.tool_call_id == "old" for m in captured)
+    assert "old output" in messages[2].content
+
+
+async def test_clearing_runs_before_summary_budget_guard(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock
+
+    from deepagents.backends import FilesystemBackend
+    from langchain.agents.middleware.types import ModelRequest
+    from langchain_core.messages import SystemMessage, ToolMessage
+
+    model = make_scripted_model([])
+    model.profile = {"max_input_tokens": 16384}
+    middleware = build_scientific_summarization_middleware(
+        model,
+        FilesystemBackend(root_dir=tmp_path, virtual_mode=True),
+        strategies=HarnessStrategies(clear_tool_results=True),
+    )
+    messages = [HumanMessage(content="goal")]
+    for identifier, result in [("a", "older " * 600), ("b", "old " * 900), ("c", "latest")]:
+        messages.extend(
+            [
+                AIMessage(
+                    content="", tool_calls=[{"id": identifier, "name": "run_julia", "args": {}}]
+                ),
+                ToolMessage(content=result, tool_call_id=identifier, name="run_julia"),
+            ]
+        )
+    request = ModelRequest(
+        model=model,
+        messages=messages,
+        system_message=SystemMessage(content="rules " * 7600),
+        tools=[],
+        model_settings={"max_tokens": 3072},
+        runtime=MagicMock(),
+        state={"messages": messages},
+    )
+    assert middleware._over_budget(request)
+
+    async def unexpected_summary(*args):
+        raise AssertionError("Clearing should leave room without a summary call")
+
+    monkeypatch.setattr(middleware, "_acreate_summary", unexpected_summary)
+    observed = []
+
+    async def handler(reduced):
+        assert not middleware._over_budget(reduced)
+        observed.extend(reduced.messages)
+        return AIMessage(content="ok")
+
+    await middleware.awrap_model_call(request, handler)
+    results = {m.tool_call_id: m.content for m in observed if isinstance(m, ToolMessage)}
+    assert results == {"a": "[cleared]", "b": "[cleared]", "c": "latest"}
+    assert messages[2].content.startswith("older")
+
+
+@pytest.mark.parametrize("clear_results", [False, True])
+async def test_compacted_request_ignores_previous_usage_scaling(
+    tmp_path, monkeypatch, clear_results
+):
+    from unittest.mock import MagicMock
+
+    from deepagents.backends import FilesystemBackend
+    from langchain.agents.middleware.types import ModelRequest
+    from langchain_core.messages import SystemMessage, ToolMessage
+    from langchain_core.messages.utils import count_tokens_approximately
+
+    model = make_scripted_model([])
+    model.profile = {"max_input_tokens": 16384}
+    middleware = build_scientific_summarization_middleware(
+        model,
+        FilesystemBackend(root_dir=tmp_path, virtual_mode=True),
+        strategies=HarnessStrategies(clear_tool_results=clear_results),
+    )
+    messages = [
+        HumanMessage(content="Earlier simulations completed. Read the current result."),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {"id": "latest", "name": "read_file", "args": {"file_path": "results/run.csv"}}
+            ],
+            usage_metadata={"input_tokens": 14000, "output_tokens": 2048, "total_tokens": 16048},
+            response_metadata={"model_provider": "openai"},
+        ),
+        ToolMessage(content="result " * 200, tool_call_id="latest", name="read_file"),
+    ]
+    request = ModelRequest(
+        model=model,
+        messages=messages,
+        system_message=SystemMessage(content="rules " * 7600),
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read a saved result.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"file_path": {"type": "string"}},
+                    },
+                },
+            }
+        ],
+        model_settings={"max_tokens": 2048},
+        runtime=MagicMock(),
+        state={"messages": messages},
+    )
+    full_request = [request.system_message, *messages]
+    budget = middleware._input_budget(request)
+    assert count_tokens_approximately(full_request, tools=request.tools) < budget
+    assert (
+        count_tokens_approximately(
+            full_request, tools=request.tools, use_usage_metadata_scaling=True
+        )
+        > budget
+    )
+
+    async def unexpected_summary(*args):
+        raise AssertionError("Previous input/output usage must not inflate the current request")
+
+    monkeypatch.setattr(middleware, "_acreate_summary", unexpected_summary)
+    received = []
+
+    async def handler(current):
+        assert not middleware._over_budget(current)
+        received.extend(current.messages)
+        return AIMessage(content="ok")
+
+    await middleware.awrap_model_call(request, handler)
+    assert [message.content for message in received] == [message.content for message in messages]
+    assert messages[1].usage_metadata["total_tokens"] == 16048

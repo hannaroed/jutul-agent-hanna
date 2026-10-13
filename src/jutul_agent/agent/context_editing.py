@@ -15,7 +15,11 @@ re-run.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
+
+from langchain.agents.middleware import ContextEditingMiddleware
+from langchain_core.messages.utils import count_tokens_approximately
 
 # Clear old tool results once the context reaches this share of the model's
 # window — below the summarization trigger, so clearing is the first, cheaper
@@ -46,7 +50,31 @@ def keep_recent_tool_results(window: int | None) -> int:
     threshold, so still inline) can otherwise exceed a local model's window.
     Keep fewer on a small window; large single results are evicted separately.
     """
+    if window and window <= 32_768:
+        return 1
     return 3 if (window and window < _SMALL_WINDOW) else 6
+
+
+class FullRequestContextEditingMiddleware(ContextEditingMiddleware):
+    """Include system text and tool schemas when deciding to clear results."""
+
+    def edit_request(self, request, *, token_counter=None):
+        def count(messages):
+            if token_counter is not None:
+                return token_counter(messages, request.system_message, request.tools)
+            system = [request.system_message] if request.system_message else []
+            return count_tokens_approximately([*system, *messages], tools=request.tools)
+
+        messages = deepcopy(list(request.messages))
+        for edit in self.edits:
+            edit.apply(messages, count_tokens=count)
+        return request.override(messages=messages)
+
+    def wrap_model_call(self, request, handler):
+        return handler(self.edit_request(request))
+
+    async def awrap_model_call(self, request, handler):
+        return await handler(self.edit_request(request))
 
 
 def _profile_window(model: Any | None) -> int | None:
@@ -69,7 +97,7 @@ def build_context_editing_middleware(
     the most recent results are kept so the active working set is untouched, with
     fewer kept on a small window so that set can't fill it.
     """
-    from langchain.agents.middleware import ClearToolUsesEdit, ContextEditingMiddleware
+    from langchain.agents.middleware import ClearToolUsesEdit
 
     # Eval bridge models carry the context budget in their profile.
     window = None
@@ -79,7 +107,7 @@ def build_context_editing_middleware(
         window = context_window(model_id)
     if window is None:
         window = _profile_window(model)
-    return ContextEditingMiddleware(
+    return FullRequestContextEditingMiddleware(
         edits=[
             ClearToolUsesEdit(
                 trigger=clear_tool_uses_trigger_tokens(window),

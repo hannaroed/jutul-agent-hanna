@@ -18,6 +18,7 @@ from deepagents.backends.protocol import (
     ExecuteResponse,
     GlobResult,
     GrepResult,
+    LsResult,
     ReadResult,
     WriteResult,
 )
@@ -114,21 +115,10 @@ class WorkspaceShellBackend(LocalShellBackend):
         """Resolve workspace aliases and preserve real host paths."""
         workspace = Path(self.cwd).resolve()
         resolved = resolve_in_workspace(raw, workspace=workspace)
-        if resolved is not None:
-            return str(resolved)
+        return str(resolved) if resolved is not None else raw
 
-        # Recover a dropped workspace component only if the host path is missing.
-        path = Path(raw)
-        if path.is_absolute():
-            try:
-                relative = path.resolve().relative_to(workspace.parent)
-                candidate = (workspace / relative).resolve()
-                candidate.relative_to(workspace)
-                if not path.exists() and candidate.exists():
-                    return str(candidate)
-            except (OSError, RuntimeError, ValueError):
-                pass
-        return raw
+    def ls(self, path: str) -> LsResult:
+        return super().ls(self._agent_path(path))
 
     def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         return super().read(self._agent_path(file_path), offset=offset, limit=limit)
@@ -144,13 +134,6 @@ class WorkspaceShellBackend(LocalShellBackend):
     ) -> GrepResult:
         if path is not None:
             path = self._agent_path(path)
-            # Ignore redundant file globs; keep traversal checks upstream.
-            if glob is not None and ".." not in Path(glob).parts:
-                try:
-                    if Path(path).is_file():
-                        glob = None
-                except (OSError, RuntimeError, ValueError):
-                    pass
         return super().grep(
             pattern,
             path=path,

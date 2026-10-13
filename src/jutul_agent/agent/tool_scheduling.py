@@ -9,7 +9,7 @@ from typing import Any
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage
 
-TOOL_SCHEDULING_POLICY = "sequential-provider-enforced-v1"
+TOOL_SCHEDULING_POLICY = "request-sequential-provider-tools-v2"
 
 
 def supports_sequential_tool_calls(model: Any) -> bool:

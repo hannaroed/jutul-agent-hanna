@@ -197,11 +197,7 @@ class SessionHost:
             extensions=self._extensions,
             added_dirs=carried or None,
             package_sources=self._package_sources or None,
-            **(
-                {"harness_strategies": self._harness_strategies}
-                if self._harness_strategies is not None
-                else {}
-            ),
+            harness_strategies=self._harness_strategies,
         )
         self.agent, self.backend = agent, backend
         self._model, self._approval_mode = new_model, new_approval
@@ -640,11 +636,7 @@ class SessionHost:
                     extensions=all_extensions,
                     added_dirs=add_dirs or None,
                     package_sources=package_sources,
-                    **(
-                        {"harness_strategies": harness_strategies}
-                        if harness_strategies is not None
-                        else {}
-                    ),
+                    harness_strategies=harness_strategies,
                 )
         except BaseException:
             await stack.aclose()

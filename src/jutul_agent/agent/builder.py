@@ -41,7 +41,6 @@ from jutul_agent.agent.capabilities import (
     collect_tools,
     select_for_surface,
 )
-from jutul_agent.agent.context_editing import build_context_editing_middleware
 from jutul_agent.agent.memory import (
     build_memory_middleware,
     ensure_memory_dir,
@@ -56,6 +55,7 @@ from jutul_agent.agent.prompts import assemble_session_prompt
 from jutul_agent.agent.recovery import InvalidToolCallRecoveryMiddleware
 from jutul_agent.agent.summarization import (
     SCIENTIFIC_SUMMARY_PROMPT,
+    SummarizationSlot,
     build_scientific_summarization_middleware,
 )
 from jutul_agent.agent.tool_scheduling import SequentialToolCallsMiddleware
@@ -511,6 +511,9 @@ def build_agent(
                 "model_profile": getattr(resolved_model, "profile", None),
             },
         )
+    summarization = build_scientific_summarization_middleware(
+        resolved_model, backend, strategies=strategies
+    )
     agent = create_deep_agent(
         model=resolved_model,
         backend=backend,
@@ -519,28 +522,20 @@ def build_agent(
         skills=skills,
         subagents=subagents,
         interrupt_on=interrupt_on_for_mode(mode),
-        # Clear older tool results before summarising the conversation.
         middleware=[
             m
             for m in (
-                # Replace the stock summariser under the same middleware name.
-                build_scientific_summarization_middleware(
-                    resolved_model, backend, strategies=strategies
-                ),
+                SummarizationSlot() if summarization is not None else None,
                 # Opt-in since deepagents stopped installing it by default. The
                 # planning it gives the model is worth its prompt cost on the
                 # long multi-step runs this agent does, and the todo list is a
                 # rendered surface in every front end.
                 TodoListMiddleware(),
                 build_memory_middleware(backend, memory_dir),
-                build_context_editing_middleware(
-                    model_id=model_spec if isinstance(model_spec, str) else None,
-                    model=resolved_model,
-                )
-                if strategies.clear_tool_results
-                else None,
                 # Ask supported providers to choose one tool call at a time.
                 SequentialToolCallsMiddleware() if strategies.sequential_tools else None,
+                # Count the prompt after memory and planning instructions are added.
+                summarization,
                 # Before the recorder in the list so its after_model hook runs
                 # after the recorder's (after_model composes in reverse): the
                 # model call is traced before a recovery jump re-enters the model.

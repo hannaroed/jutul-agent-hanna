@@ -58,19 +58,36 @@ fire only when the cheaper ones are not enough:
   `agent/context_editing.py`). It is
   transparent (the raw log is untouched; only the model's per-call view is
   clipped) and cleared results are re-derivable: the files are still on disk and
-  REPL commands can be re-run. The attempt log is never cleared, since the agent
+  REPL commands can be re-run. The clearing decision includes the system prompt
+  and tool schemas. At windows of 32k tokens or less, only the latest eligible
+  tool result stays verbatim. Clearing uses the summarizer's token counter and
+  reconstructed history, before its budget guard. Memory and planning instructions
+  are injected before this guard, so they count towards the budget.
+  The estimate uses the current request without scaling it from previous
+  input/output usage, which becomes stale after clearing or summarization.
+  The attempt log is never cleared, since the agent
   refers back to it by value.
 - **Summarization.** When clearing is not enough and the conversation reaches
   ~85% of the window, the older turns are replaced by a structured summary
   (session intent, key decisions, artifacts, next steps) while the newest turns
-  stay verbatim. The summarized turns are offloaded to
+  stay verbatim. At windows of 32k tokens or less, the retained tail is the
+  latest two messages (a tool call and its result). This allows compaction even
+  when fixed prompt and tool overhead fill most of the window.
+  The summarized turns are offloaded to
   `conversation_history/<internal-session-id>.md` first, so they remain
   recoverable, and the summary embeds that path. This is deepagents' stock
-  backend-recoverable `SummarizationMiddleware`, installed by
-  `create_deep_agent`, sized from the model profile (which
+  backend-recoverable `SummarizationMiddleware`, adapted and installed after
+  prompt injection by our builder, sized from the model profile (which
   `builder._set_profile_window` points at the real loaded window), and
   non-mutating; `TraceRecorder` records each compaction. We lean on the stock
   middleware so upstream improvements arrive without porting.
+
+The fork can switch between the stock summary prompt and a scientific prompt
+that preserves run IDs, units, exact values, artifact paths and pending actions.
+`HarnessStrategies` also switches clearing of old tool results independently.
+These switches let evaluations compare settings with the same task and budget;
+they do not guarantee an improvement. Summaries remain lossy, so exact results
+belong in saved artifacts and must be retrieved when reporting them.
 
 `/context` shows measured usage by category (the last call's `usage_metadata`
 is exactly what the conversation costs to send) plus both the clearing and the

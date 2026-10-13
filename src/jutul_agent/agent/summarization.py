@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 from deepagents.middleware.summarization import (
@@ -13,7 +14,7 @@ from deepagents.middleware.summarization import (
     SummarizationMiddleware,
     compute_summarization_defaults,
 )
-from langchain.agents.middleware.types import ModelRequest, ModelResponse
+from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage
 from langchain_core.messages.utils import count_tokens_approximately
 
@@ -80,12 +81,18 @@ def _sanitize_request_history(request: ModelRequest) -> ModelRequest:
     return request.override(messages=messages)
 
 
+class SummarizationSlot(AgentMiddleware):
+    """Replace the stock slot so summarization can run after prompt injection."""
+
+    name = "SummarizationMiddleware"
+
+
 class ScientificSummarizationMiddleware(SummarizationMiddleware):
     """Deep Agents summarizer with a clean model-visible summary boundary."""
 
-    # The shared name replaces Deep Agents' stock summariser.
-    name = "SummarizationMiddleware"
+    name = "ScientificSummarizationMiddleware"
     sanitize_history = True
+    context_editor = None
 
     def wrap_model_call(
         self,
@@ -103,6 +110,14 @@ class ScientificSummarizationMiddleware(SummarizationMiddleware):
         cleaned = _sanitize_request_history(request) if self.sanitize_history else request
         return await super().awrap_model_call(cleaned, handler)
 
+    def _get_effective_messages(self, request: ModelRequest) -> list[Any]:
+        messages = super()._get_effective_messages(request)
+        if self.context_editor is not None:
+            return self.context_editor.edit_request(
+                request.override(messages=messages), token_counter=self._count_tokens
+            ).messages
+        return messages
+
     def _build_new_messages_with_path(
         self,
         summary: str,
@@ -113,28 +128,12 @@ class ScientificSummarizationMiddleware(SummarizationMiddleware):
 
 
 _SCIENTIFIC_STATE_GUIDANCE = """<scientific_state_preservation>
-This conversation belongs to a scientific simulation and research agent.
-When summarizing, preserve the experiment state needed for later decisions:
-
-- exact run, case, and attempt identifiers;
-- input parameters and every reported comparison metric, including units;
-- acceptance constraints, thresholds, and which runs satisfy them;
-- artifact paths and a precise note of what each artifact contains;
-- commands already executed and whether they succeeded, so work is not repeated.
-- every explicit verification gate or pending action, preserving its identifier,
-  order, tool name, exact path or search pattern, and completion status verbatim.
-
-Do not copy bulky arrays or tables into the summary. Preserve their path and
-schema instead. Record workspace artifacts only with the exact workspace-relative
-path that appeared in a user message or tool result. Never construct an absolute
-artifact path from the working directory, change a filename or extension, or
-invent a ledger/artifact that was not explicitly observed. If a path was not
-observed, label it unknown. Never invent a missing value. If a future decision
-requires a detail that remains only in an artifact, explicitly say to retrieve it
-with the filesystem search/read tools and retain the exact observed path or path
-pattern needed. A task is not complete while a verification-gate action is still
-pending: never replace a required retrieval with a remembered, rounded, example,
-or guessed value, and never summarize a pending action as if it had happened.
+Preserve run IDs, input parameters, exact comparison values with units, and
+acceptance limits. Record which simulations succeeded or failed and which
+steps remain, in order. Never describe a pending step as completed.
+Keep observed artifact paths exactly as returned, without inventing or changing
+paths or values. For large arrays and tables, preserve the path and schema so
+missing details can be retrieved with filesystem search/read tools.
 </scientific_state_preservation>"""
 
 SCIENTIFIC_SUMMARY_PROMPT = DEEPAGENTS_DEFAULT_SUMMARY_PROMPT.replace(
@@ -154,11 +153,19 @@ def build_scientific_summarization_middleware(
         return None
     defaults = compute_summarization_defaults(model)
     strategies = strategies or HarnessStrategies()
+    window = (getattr(model, "profile", None) or {}).get("max_input_tokens")
+    keep = ("messages", 2) if isinstance(window, int) and window <= 32_768 else defaults["keep"]
     middleware = ScientificSummarizationMiddleware(
         model=model,
         backend=backend,
         trigger=defaults["trigger"],
-        keep=defaults["keep"],
+        keep=keep,
+        # Prior usage describes the old history, not the compacted request.
+        token_counter=partial(
+            count_tokens_approximately,
+            use_usage_metadata_scaling=False,
+            chars_per_token=3.3 if model._llm_type.startswith("anthropic-chat") else 4.0,
+        ),
         truncate_args_settings=defaults["truncate_args_settings"],
         summary_prompt=SCIENTIFIC_SUMMARY_PROMPT
         if strategies.summarization == "scientific"
@@ -166,11 +173,17 @@ def build_scientific_summarization_middleware(
         trim_tokens_to_summarize=None,
     )
     middleware.sanitize_history = strategies.sanitize_history
+    if strategies.clear_tool_results:
+        from jutul_agent.agent.context_editing import build_context_editing_middleware
+
+        middleware.context_editor = build_context_editing_middleware(model=model)
     return middleware
 
 
 # Check the private engine methods needed by manual /compact.
 _ENGINE_METHODS: tuple[str, ...] = (
+    "_get_effective_messages",
+    "_count_tokens",
     "_apply_event_to_messages",
     "_determine_cutoff_index",
     "_partition_messages",

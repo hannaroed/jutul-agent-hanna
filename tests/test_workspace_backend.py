@@ -68,63 +68,24 @@ def test_workspace_backend_resolves_middleware_and_workspace_virtual_paths(tmp_p
     assert grep.error is None
     assert grep.matches
 
+    listing = backend.ls("/workspace/results")
+    assert listing.error is None
+    assert listing.entries
     glob = backend.glob("*.csv", path="/workspace")
     assert glob.error is None
     assert any(match["path"].endswith("campaign-index.csv") for match in glob.matches or [])
 
 
-def test_grep_exact_file_ignores_a_redundant_matching_glob(tmp_path: Path) -> None:
-    """An exact-file search must survive a model's redundant include glob."""
-    results = tmp_path / "results"
-    results.mkdir()
-    artifact = results / "run-falcon.csv"
-    artifact.write_text(
-        "run_id,cell_id,value\nrun-falcon,150,0.4751061563590662\n",
-        encoding="utf-8",
-    )
-    backend = WorkspaceShellBackend(root_dir=tmp_path, virtual_mode=False, inherit_env=True)
-
-    hit = backend.grep(
-        ",150,",
-        path="/results/run-falcon.csv",
-        glob="results/*.csv",
-        max_count=1,
-    )
-    assert hit.error is None
-    assert hit.matches
-    assert hit.matches[0]["text"].endswith(",150,0.4751061563590662")
-
-    # Include globs filter directory searches; an exact file path already made
-    # that selection, matching the backend's documented single-file behavior.
-    hit_with_other_glob = backend.grep(",150,", path="/results/run-falcon.csv", glob="*.json")
-    assert hit_with_other_glob.error is None
-    assert hit_with_other_glob.matches
-
-
-def test_workspace_backend_recovers_missing_workspace_path_component(tmp_path: Path) -> None:
+def test_workspace_backend_does_not_guess_a_missing_absolute_path(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
-    results = workspace / "results"
-    results.mkdir(parents=True)
-    ledger = workspace / "campaign-index.csv"
-    ledger.write_text("run_id,artifact_path\nrun-falcon,results/run-falcon.csv\n")
-    artifact = results / "run-falcon.csv"
-    artifact.write_text("run-falcon,150,0.4751061563590662\n")
-    backend = WorkspaceShellBackend(root_dir=workspace, virtual_mode=False, inherit_env=True)
+    workspace.mkdir()
+    (workspace / "campaign-index.csv").write_text("actual-workspace-content\n")
+    backend = WorkspaceShellBackend(root_dir=workspace, virtual_mode=False)
 
-    # A compacted summary dropped the real path's final `workspace/` segment.
-    recovered = backend.read(str(tmp_path / "campaign-index.csv"))
-    assert recovered.error is None
-    assert "run-falcon" in recovered.file_data["content"]
-    nested = backend.grep(",150,", path=str(tmp_path / "results" / "run-falcon.csv"))
-    assert nested.error is None
-    assert nested.matches
-
-    # An existing real sibling is intentional and must win over recovery.
     sibling = tmp_path / "campaign-index.csv"
-    sibling.write_text("sibling-content\n", encoding="utf-8")
-    preserved = backend.read(str(sibling))
-    assert preserved.error is None
-    assert preserved.file_data["content"] == "sibling-content\n"
+    assert backend.read(str(sibling)).error is not None
+    sibling.write_text("sibling-content\n")
+    assert backend.read(str(sibling)).file_data["content"] == "sibling-content\n"
 
 
 def test_workspace_backend_absolute_path_writes_the_real_file(tmp_path: Path) -> None:

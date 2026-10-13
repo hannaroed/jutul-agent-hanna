@@ -1,4 +1,4 @@
-"""Tests for provider-enforced sequential tool scheduling."""
+"""Tests for requesting sequential tool calls from the provider."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ def test_detects_explicit_provider_control() -> None:
     assert supports_sequential_tool_calls(_UnsupportedModel()) is False
 
 
-async def test_enforces_one_tool_call_without_losing_existing_settings() -> None:
+async def test_requests_one_tool_call_without_losing_existing_settings() -> None:
     captured = {}
 
     async def handler(request):

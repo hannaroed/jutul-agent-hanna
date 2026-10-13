@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
 from langchain.agents.middleware import ClearToolUsesEdit, ContextEditingMiddleware
 from langchain.agents.middleware.types import ModelRequest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from jutul_agent.agent.context_editing import (
     build_context_editing_middleware,
@@ -27,6 +28,7 @@ def test_keep_recent_tool_results_scales_with_window() -> None:
     assert keep_recent_tool_results(65_536) == 3
     assert keep_recent_tool_results(200_000) == 6
     assert keep_recent_tool_results(None) == 6
+    assert keep_recent_tool_results(16_384) == 1
 
 
 def test_build_context_editing_middleware_config(monkeypatch) -> None:
@@ -47,7 +49,7 @@ def test_build_context_editing_uses_prebuilt_model_profile() -> None:
     middleware = build_context_editing_middleware(model=model)
     (edit,) = middleware.edits
     assert edit.trigger == int(16_384 * 0.6)
-    assert edit.keep == 3
+    assert edit.keep == 1
 
 
 def _tool_round(call_id: str, name: str, result: str) -> list:
@@ -95,3 +97,56 @@ async def test_clears_old_tool_results_but_keeps_recent_and_excluded() -> None:
     # Non-mutating: the original messages still carry the full result.
     original = next(m for m in messages if isinstance(m, ToolMessage) and m.tool_call_id == "a")
     assert original.content.startswith("OLD SOURCE DUMP")
+
+
+@pytest.mark.parametrize("overhead", ["system", "tools"])
+async def test_clearing_counts_system_and_schema_overhead_without_mutating_history(overhead):
+    messages = [
+        HumanMessage(content="start"),
+        *_tool_round("a", "run_julia", "old"),
+        *_tool_round("b", "run_julia", "latest"),
+    ]
+    request = ModelRequest(
+        model=MagicMock(profile={"max_input_tokens": 16_384}),
+        messages=messages,
+        system_message=SystemMessage(content="system rules " * 4000)
+        if overhead == "system"
+        else None,
+        tools=[{"type": "function", "function": {"name": "probe", "description": "schema " * 6000}}]
+        if overhead == "tools"
+        else [],
+        runtime=MagicMock(),
+        state={"messages": messages},
+    )
+    middleware = build_context_editing_middleware(model=request.model)
+    observed = []
+
+    async def handler(req):
+        observed.extend(req.messages)
+        return AIMessage(content="ok")
+
+    await middleware.awrap_model_call(request, handler)
+    results = {m.tool_call_id: m.content for m in observed if isinstance(m, ToolMessage)}
+    assert results == {"a": "[cleared]", "b": "latest"}
+    assert messages[2].content == "old"
+
+
+def test_clearing_can_use_the_guard_counter_when_estimates_disagree():
+    messages = [
+        HumanMessage(content="start"),
+        *_tool_round("a", "run_julia", "old"),
+        *_tool_round("b", "run_julia", "latest"),
+    ]
+    request = ModelRequest(
+        model=MagicMock(profile={"max_input_tokens": 16384}),
+        messages=messages,
+        system_message=None,
+        tools=[],
+        runtime=MagicMock(),
+        state={"messages": messages},
+    )
+    middleware = build_context_editing_middleware(model=request.model)
+    reduced = middleware.edit_request(request, token_counter=lambda messages, system, tools: 20000)
+    assert reduced.messages[2].content == "[cleared]"
+    assert reduced.messages[4].content == "latest"
+    assert messages[2].content == "old"
