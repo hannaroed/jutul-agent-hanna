@@ -24,13 +24,8 @@ from jutul_agent.eval.scorers import (  # noqa: E402
     artifact_produced,
     avoided_tools,
     context_compaction_count,
-    julia_case_call_coverage,
-    julia_case_recovered_from_ledger,
-    julia_function_call_count,
     no_interpreters_via_execute,
-    numeric_values_close,
     tool_result_character_count,
-    tool_result_numeric_evidence,
     used_tools,
 )
 from jutul_agent.eval.solver import (  # noqa: E402
@@ -38,7 +33,6 @@ from jutul_agent.eval.solver import (  # noqa: E402
     STORE_WORKSPACE,
     _bridge_model,
     _final_text,
-    _run_prompts,
 )
 from jutul_agent.simulators import registry  # noqa: E402
 from jutul_agent.trace import TraceLog  # noqa: E402
@@ -116,90 +110,6 @@ async def test_artifact_produced_needs_a_nonempty_file(tmp_path: Path) -> None:
     assert (await artifact_produced(".png")(empty, Target(""))).value == "I"
 
 
-async def test_numeric_values_close_requires_every_value() -> None:
-    state = SimpleNamespace(output=SimpleNamespace(completion="run: 0.51, 303.283, 0.4751"))
-    passed = await numeric_values_close((0.5095, 303.2835, 0.4751), 0.001)(state, Target(""))
-    failed = await numeric_values_close((0.5095, 303.2835, 0.9), 0.001)(state, Target(""))
-    assert passed.value == "C"
-    assert failed.value == "I"
-
-
-async def test_numeric_values_close_supports_value_specific_tolerances() -> None:
-    expected = (0.5094961204297902, 303.2834880549588, 0.4751061563590662)
-    tolerances = (5e-7, 5e-4, 5e-7)
-    imprecise = SimpleNamespace(output=SimpleNamespace(completion="0.50950, 303.283, 0.475106"))
-    score = await numeric_values_close(expected, tolerances)(imprecise, Target(""))
-    assert score.value == "I"
-    assert "0.5094961204297902" in (score.explanation or "")
-
-    precise = SimpleNamespace(output=SimpleNamespace(completion="0.509496, 303.283, 0.475106"))
-    passed = await numeric_values_close(
-        (0.5094961204297902, 303.2834880549588, 0.4751061563590662),
-        tolerances,
-    )(precise, Target(""))
-    assert passed.value == "C"
-
-    with pytest.raises(ValueError, match="one entry per expected value"):
-        numeric_values_close((1.0, 2.0), (0.1,))
-
-
-async def test_tool_result_numeric_evidence_requires_artifact_read(tmp_path: Path) -> None:
-    passed = _state(
-        tmp_path,
-        [
-            ("tool_call", {"id": "read", "name": "read_file", "args": {}}),
-            (
-                "tool_result",
-                {
-                    "tool_call_id": "read",
-                    "status": "success",
-                    "name": "read_file",
-                    "content": "run-falcon,...,150,...,0.4751061563590662",
-                },
-            ),
-        ],
-    )
-    missing = _state(
-        tmp_path / "missing",
-        [("tool_result", {"name": "run_julia", "content": "0.4751061563590662"})],
-    )
-    scorer = tool_result_numeric_evidence((0.4751061563590662,), 0.001)
-    assert (await scorer(passed, Target(""))).value == "C"
-    assert (await scorer(missing, Target(""))).value == "I"
-
-
-async def test_tool_result_numeric_evidence_can_require_a_target_row(tmp_path: Path) -> None:
-    state = _state(
-        tmp_path,
-        [
-            ("tool_call", {"id": "grep", "name": "grep", "args": {}}),
-            (
-                "tool_result",
-                {
-                    "tool_call_id": "grep",
-                    "status": "success",
-                    "name": "grep",
-                    "content": "run-falcon,...,150,...,0.4751061563590662",
-                },
-            ),
-            (
-                "tool_result",
-                {
-                    "name": "grep",
-                    "content": "run-falcon,...,149,...,0.4751061563590662",
-                },
-            ),
-        ],
-    )
-    scorer = tool_result_numeric_evidence(
-        (0.4751061563590662,),
-        0.001,
-        tools=("grep",),
-        required_text=("run-falcon", ",150,"),
-    )
-    assert (await scorer(state, Target(""))).value == "C"
-
-
 async def test_tool_result_character_count_can_select_tools(tmp_path: Path) -> None:
     state = _state(
         tmp_path,
@@ -223,195 +133,6 @@ async def test_context_compaction_count_reads_trace(tmp_path: Path) -> None:
     )
     score = await context_compaction_count()(state, Target(""))
     assert score.value == 2
-
-
-async def test_julia_case_call_coverage_requires_separate_exactly_once_calls(
-    tmp_path: Path,
-) -> None:
-    cases = ("run-cedar", "run-falcon")
-    scorer = julia_case_call_coverage("run_case", cases)
-    separate = _state(
-        tmp_path,
-        [
-            (
-                "tool_call",
-                {"id": "a", "name": "run_julia", "args": {"code": 'run_case("run-cedar")'}},
-            ),
-            (
-                "tool_result",
-                {"tool_call_id": "a", "name": "run_julia", "content": "ok", "status": "success"},
-            ),
-            (
-                "tool_call",
-                {"id": "b", "name": "run_julia", "args": {"code": 'run_case("run-falcon")'}},
-            ),
-            (
-                "tool_result",
-                {"tool_call_id": "b", "name": "run_julia", "content": "ok", "status": "success"},
-            ),
-        ],
-    )
-    batched = _state(
-        tmp_path / "batched",
-        [
-            (
-                "tool_call",
-                {
-                    "id": "a",
-                    "name": "run_julia",
-                    "args": {"code": 'run_case("run-cedar"); run_case("run-falcon")'},
-                },
-            )
-        ],
-    )
-    parallel = _state(
-        tmp_path / "parallel",
-        [
-            (
-                "tool_call",
-                {"id": "a", "name": "run_julia", "args": {"code": 'run_case("run-cedar")'}},
-            ),
-            (
-                "tool_call",
-                {"id": "b", "name": "run_julia", "args": {"code": 'run_case("run-falcon")'}},
-            ),
-            (
-                "tool_result",
-                {"tool_call_id": "a", "name": "run_julia", "content": "ok", "status": "success"},
-            ),
-            (
-                "tool_result",
-                {"tool_call_id": "b", "name": "run_julia", "content": "ok", "status": "success"},
-            ),
-        ],
-    )
-    duplicate = _state(
-        tmp_path / "duplicate",
-        [
-            ("tool_call", {"name": "run_julia", "args": {"code": 'run_case("run-cedar")'}}),
-            ("tool_call", {"name": "run_julia", "args": {"code": 'run_case("run-cedar")'}}),
-            ("tool_call", {"name": "run_julia", "args": {"code": 'run_case("run-falcon")'}}),
-        ],
-    )
-    assert (await scorer(separate, Target(""))).value == "C"
-    assert (await scorer(batched, Target(""))).value == "I"
-    assert (await scorer(parallel, Target(""))).value == "I"
-    assert (await scorer(duplicate, Target(""))).value == "I"
-
-
-async def test_julia_case_recovery_requires_error_checkpoint_then_retry(
-    tmp_path: Path,
-) -> None:
-    scorer = julia_case_recovered_from_ledger("run_case", "run-maple")
-    recovered = _state(
-        tmp_path,
-        [
-            (
-                "tool_call",
-                {"id": "first", "name": "run_julia", "args": {"code": 'run_case("run-maple")'}},
-            ),
-            (
-                "tool_result",
-                {
-                    "tool_call_id": "first",
-                    "name": "run_julia",
-                    "status": "success",
-                    "content": "ERROR: transient Julia failure",
-                },
-            ),
-            (
-                "tool_call",
-                {
-                    "id": "read",
-                    "name": "read_file",
-                    "args": {"file_path": "/workspace/campaign-index.csv"},
-                },
-            ),
-            (
-                "tool_result",
-                {
-                    "tool_call_id": "read",
-                    "name": "read_file",
-                    "content": "completed",
-                    "status": "success",
-                },
-            ),
-            (
-                "tool_call",
-                {"id": "retry", "name": "run_julia", "args": {"code": 'run_case("run-maple")'}},
-            ),
-            (
-                "tool_result",
-                {
-                    "tool_call_id": "retry",
-                    "name": "run_julia",
-                    "content": "ok",
-                    "status": "success",
-                },
-            ),
-        ],
-    )
-    blind_retry = _state(
-        tmp_path / "blind",
-        [
-            (
-                "tool_call",
-                {"id": "first", "name": "run_julia", "args": {"code": 'run_case("run-maple")'}},
-            ),
-            (
-                "tool_result",
-                {"tool_call_id": "first", "name": "run_julia", "status": "error"},
-            ),
-            (
-                "tool_call",
-                {"id": "retry", "name": "run_julia", "args": {"code": 'run_case("run-maple")'}},
-            ),
-        ],
-    )
-    assert (await scorer(recovered, Target(""))).value == "C"
-    assert (await scorer(blind_retry, Target(""))).value == "I"
-
-
-async def test_julia_function_call_count_requires_sequential_budget(
-    tmp_path: Path,
-) -> None:
-    scorer = julia_function_call_count("run_adaptive_case", 2)
-    sequential = _state(
-        tmp_path,
-        [
-            (
-                "tool_call",
-                {"id": "a", "name": "run_julia", "args": {"code": "run_adaptive_case(950)"}},
-            ),
-            (
-                "tool_result",
-                {"tool_call_id": "a", "name": "run_julia", "content": "ok", "status": "success"},
-            ),
-            (
-                "tool_call",
-                {"id": "b", "name": "run_julia", "args": {"code": "run_adaptive_case(1100)"}},
-            ),
-            (
-                "tool_result",
-                {"tool_call_id": "b", "name": "run_julia", "content": "ok", "status": "success"},
-            ),
-        ],
-    )
-    parallel = _state(
-        tmp_path / "parallel-budget",
-        [
-            (
-                "tool_call",
-                {"id": "a", "name": "run_julia", "args": {"code": "run_adaptive_case(950)"}},
-            ),
-            (
-                "tool_call",
-                {"id": "b", "name": "run_julia", "args": {"code": "run_adaptive_case(1100)"}},
-            ),
-        ],
-    )
-    assert (await scorer(sequential, Target(""))).value == "C"
-    assert (await scorer(parallel, Target(""))).value == "I"
 
 
 def test_final_text_takes_the_last_assistant_message() -> None:
@@ -446,40 +167,29 @@ def test_eval_bridge_exposes_controlled_context_window(
     assert model.profile["max_input_tokens"] == 16_384
 
 
-async def test_run_prompts_uses_one_runner_for_every_turn() -> None:
-    class Runner:
-        def __init__(self) -> None:
-            self.prompts: list[str] = []
+def test_compatible_provider_uses_chat_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+    from jutul_agent.eval import solver
 
-        async def run_prompt(self, prompt: str) -> SimpleNamespace:
-            self.prompts.append(prompt)
-            return SimpleNamespace(
-                messages=[AIMessage(content=f"answer {len(self.prompts)}")],
-                interrupts=[],
-            )
-
-    runner = Runner()
-    result = await _run_prompts(runner, "first", ["second", "third"])
-
-    assert runner.prompts == ["first", "second", "third"]
-    assert _final_text(result.messages) == "answer 3"
+    monkeypatch.setattr(solver, "get_model", lambda: "openai-api/vllm/Qwen/Qwen3-8B")
+    model = _bridge_model(context_window=16_384)
+    assert model.model_name == "inspect"
+    assert model.use_responses_api is False
+    assert model.profile["max_input_tokens"] == 16_384
 
 
-async def test_run_prompts_stops_after_an_interrupt() -> None:
-    class Runner:
-        def __init__(self) -> None:
-            self.prompts: list[str] = []
+def test_eval_bridge_exposes_output_budget_to_context_guard(monkeypatch: pytest.MonkeyPatch):
+    from jutul_agent.eval import solver
 
-        async def run_prompt(self, prompt: str) -> SimpleNamespace:
-            self.prompts.append(prompt)
-            interrupts = [object()] if prompt == "second" else []
-            return SimpleNamespace(messages=[], interrupts=interrupts)
+    class TargetModel:
+        config = SimpleNamespace(max_tokens=4096)
 
-    runner = Runner()
-    result = await _run_prompts(runner, "first", ["second", "third"])
+        def __str__(self):
+            return "openai-api/vllm/Qwen/Qwen3-8B"
 
-    assert runner.prompts == ["first", "second"]
-    assert result.interrupts
+    monkeypatch.setattr(solver, "get_model", TargetModel)
+    model = _bridge_model(context_window=16_384)
+    assert model.max_tokens == 4096
+    assert model.profile["max_input_tokens"] == 16_384
 
 
 def test_runconfig_hashes_the_tunable_inputs() -> None:
@@ -491,7 +201,7 @@ def test_runconfig_hashes_the_tunable_inputs() -> None:
     assert config["simulator"] == "jutuldarcy"
     assert config["context_window"] == 16_384
     assert config["path_policy"] == "agent-visible-to-real-path-resolution-v1"
-    assert config["tool_scheduling"] == "sequential-provider-enforced-v1"
+    assert config["tool_scheduling"] == "request-sequential-provider-tools-v2"
     assert config["summary_sanitization"] == "strip-internal-reasoning-capsules-v1"
     assert config["message_history_sanitization"] == (
         "strip-internal-reasoning-capsules-before-model-v1"
@@ -506,19 +216,13 @@ def test_task_suites_import_and_build() -> None:
         api_discovery,
         battmo,
         canary,
-        experiment_adaptive,
         experiment_autonomous,
-        experiment_ledger,
-        experiment_recovery,
-        experiment_state,
-        experiment_targeted,
         filesystem,
         filesystem_source,
         fimbul,
         guardrails,
         jutuldarcy,
         mocca,
-        multiturn,
         plotting,
         search,
         search_source,
@@ -532,13 +236,7 @@ def test_task_suites_import_and_build() -> None:
         (battmo, battmo.battmo),
         (fimbul, fimbul.fimbul),
         (mocca, mocca.mocca),
-        (experiment_adaptive, experiment_adaptive.experiment_adaptive),
         (experiment_autonomous, experiment_autonomous.experiment_autonomous),
-        (experiment_ledger, experiment_ledger.experiment_ledger),
-        (experiment_recovery, experiment_recovery.experiment_recovery),
-        (experiment_state, experiment_state.experiment_state),
-        (experiment_targeted, experiment_targeted.experiment_targeted),
-        (multiturn, multiturn.multiturn),
         (filesystem, filesystem.filesystem),
         (filesystem_source, filesystem_source.filesystem_source),
         (search, search.search),
@@ -549,136 +247,17 @@ def test_task_suites_import_and_build() -> None:
         assert suite.dataset, f"{module.__name__}: empty dataset"
 
 
-def test_multiturn_pilot_pairs_a_control_with_three_turns() -> None:
-    from jutul_agent.eval.tasks.multiturn import multiturn
-
-    samples = multiturn().dataset
-
-    assert [sample.id for sample in samples] == ["mt0-direct-control", "mt1-reference-case"]
-    assert not samples[0].metadata
-    assert len(samples[1].metadata["follow_up_prompts"]) == 2
-
-
-def test_experiment_state_runs_six_cases_before_the_decision() -> None:
-    from jutul_agent.eval.tasks.experiment_state import experiment_state
-
-    sample = experiment_state().dataset[0]
-
-    assert sample.id == "experiment-state-jutuldarcy"
-    assert sample.metadata["case_count"] == 6
-    assert len(sample.metadata["follow_up_prompts"]) == 6
-    assert sample.metadata["needs_env"] is True
-    assert sample.metadata["context_window"] == 16_384
-    assert sample.metadata["memory_strategy"] == "conversation-summary-only"
-    assert "run_campaign_case" in sample.metadata["fixtures"]["campaign.jl"]
-
-
-def test_experiment_ledger_requires_structured_artifact_retrieval() -> None:
-    from jutul_agent.eval.tasks.experiment_ledger import experiment_ledger
-
-    sample = experiment_ledger().dataset[0]
-
-    assert sample.id == "experiment-ledger-jutuldarcy"
-    assert sample.metadata["memory_strategy"] == "structured-artifact-ledger"
-    assert sample.metadata["context_window"] == 16_384
-    assert "run_campaign_case_with_ledger" in sample.input
-    assert "campaign-index.csv" in sample.metadata["follow_up_prompts"][-1]
-
-
-def test_experiment_targeted_requires_a_bounded_row_query() -> None:
-    from jutul_agent.eval.tasks.experiment_targeted import experiment_targeted
-
-    sample = experiment_targeted().dataset[0]
-
-    assert sample.id == "experiment-targeted-jutuldarcy"
-    assert (
-        sample.metadata["memory_strategy"] == "structured-ledger-targeted-retrieval-stable-locators"
-    )
-    assert (
-        sample.metadata["artifact_locator_strategy"] == "tool-returned-workspace-relative-paths-v1"
-    )
-    assert sample.metadata["context_window"] == 16_384
-    assert sample.metadata["path_policy"] == "agent-visible-to-real-path-resolution-v1"
-    assert "literal pattern `,150,`" in sample.metadata["follow_up_prompts"][-1]
-    assert "Do not read the entire detailed artifact" in sample.metadata["follow_up_prompts"][-1]
-
-
 def test_experiment_autonomous_has_one_goal_and_no_follow_ups() -> None:
     from jutul_agent.eval.tasks.experiment_autonomous import experiment_autonomous
 
     sample = experiment_autonomous().dataset[0]
 
     assert sample.id == "experiment-autonomous-jutuldarcy"
-    assert sample.metadata["interaction_strategy"] == "single-goal-autonomous-loop"
-    assert sample.metadata["human_follow_up_count"] == 0
     assert "follow_up_prompts" not in sample.metadata
     assert sample.metadata["case_count"] == 6
     assert "run_autonomous_campaign_case" in sample.input
     assert "Run one case per `run_julia`" in sample.input
     assert "literal pattern `,150,`" in sample.input
-    assert (
-        sample.metadata["verification_strategy"] == "compaction-safe-ordered-verification-gate-v2"
-    )
-    assert sample.metadata["answer_precision_policy"] == (
-        "six-significant-digits-value-specific-v1"
-    )
-    assert sample.metadata["numeric_tolerances"] == (5e-7, 5e-4, 5e-7)
-    fixture = sample.metadata["fixtures"]["campaign.jl"]
-    assert "verification_gate_id=campaign-evidence-v2" in fixture
-    assert "verification_step_1=pending tool=read_file" in fixture
-    assert "verification_step_2=pending_after_step_1 tool=grep" in fixture
-    assert "completion_rule=do_not_answer_until_both_verification_steps_are_observed" in fixture
-
-
-def test_experiment_recovery_injects_one_checkpointed_fault() -> None:
-    from jutul_agent.eval.tasks.experiment_recovery import experiment_recovery
-
-    sample = experiment_recovery().dataset[0]
-
-    assert sample.id == "experiment-recovery-jutuldarcy"
-    assert sample.metadata["interaction_strategy"] == "single-goal-fault-recovery-loop"
-    assert sample.metadata["human_follow_up_count"] == 0
-    assert "follow_up_prompts" not in sample.metadata
-    assert "Injected transient campaign failure" in sample.metadata["fixtures"]["campaign.jl"]
-    assert "recovery_gate_id=campaign-maple-v2" in sample.metadata["fixtures"]["campaign.jl"]
-    assert "recovery_step_1=pending tool=read_file" in sample.metadata["fixtures"]["campaign.jl"]
-    assert (
-        "recovery_step_2=pending_after_step_1 tool=run_julia"
-        in sample.metadata["fixtures"]["campaign.jl"]
-    )
-    assert "return run_autonomous_campaign_case(name)" in sample.metadata["fixtures"]["campaign.jl"]
-    assert (
-        sample.metadata["verification_strategy"] == "compaction-safe-ordered-verification-gate-v2"
-    )
-    assert sample.metadata["recovery_strategy"] == "checkpoint-read-retry-gate-v2"
-    assert "read `campaign-index.csv`" in sample.input
-
-
-def test_experiment_adaptive_has_a_hard_three_run_budget() -> None:
-    from jutul_agent.eval.tasks.experiment_adaptive import experiment_adaptive
-
-    sample = experiment_adaptive().dataset[0]
-
-    assert sample.id == "experiment-adaptive-jutuldarcy"
-    assert sample.metadata["interaction_strategy"] == "single-goal-budgeted-adaptive-design"
-    assert sample.metadata["simulation_budget"] == 3
-    assert sample.metadata["candidate_count"] == 6
-    assert sample.metadata["human_follow_up_count"] == 0
-    assert "follow_up_prompts" not in sample.metadata
-    fixture = sample.metadata["fixtures"]["campaign.jl"]
-    assert "adaptive run budget exhausted" in fixture
-    assert "verification_gate_id=adaptive-evidence-v1" in fixture
-    assert "verification_step_1=pending tool=read_file" in fixture
-    assert "verification_step_2=pending_after_step_1 tool=grep" in fixture
-    assert "completion_rule=do_not_answer_until_both_verification_steps_are_observed" in fixture
-    assert (
-        sample.metadata["verification_strategy"] == "compaction-safe-ordered-verification-gate-v2"
-    )
-    assert sample.metadata["answer_precision_policy"] == (
-        "six-significant-digits-value-specific-v1"
-    )
-    assert sample.metadata["numeric_tolerances"] == (5e-7, 5e-4, 5e-7)
-    assert "choose each rate adaptively" in sample.input
 
 
 def test_canary_uses_the_real_workspace_relative_path() -> None:
@@ -703,13 +282,7 @@ def test_eval_cli_lists_suites_and_rejects_unknown(capsys) -> None:
         "battmo",
         "fimbul",
         "mocca",
-        "experiment_adaptive",
         "experiment_autonomous",
-        "experiment_ledger",
-        "experiment_recovery",
-        "experiment_state",
-        "experiment_targeted",
-        "multiturn",
         "filesystem",
         "filesystem_source",
         "search",
@@ -1093,20 +666,6 @@ async def test_workspace_file_exists_checks_the_workspace_on_disk(tmp_path: Path
     assert (await workspace_file_exists("missing.txt")(state, Target(""))).value == "I"
     # An empty file is a stub, not a saved result.
     assert (await workspace_file_exists("empty.txt")(state, Target(""))).value == "I"
-
-
-async def test_workspace_file_count_checks_completed_campaign_outputs(tmp_path: Path) -> None:
-    from jutul_agent.eval.scorers import workspace_file_count
-
-    results = tmp_path / "results"
-    results.mkdir()
-    (results / "a.csv").write_text("step,value\n1,2\n", encoding="utf-8")
-    (results / "b.csv").write_text("step,value\n1,3\n", encoding="utf-8")
-    (results / "empty.csv").write_text("", encoding="utf-8")
-    state = _state(tmp_path, [])
-
-    assert (await workspace_file_count("results/*.csv", 2)(state, Target(""))).value == "C"
-    assert (await workspace_file_count("results/*.csv", 3)(state, Target(""))).value == "I"
 
 
 async def test_answer_cites_requires_all_and_forbids_misses() -> None:

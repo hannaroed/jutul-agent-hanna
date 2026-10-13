@@ -1,20 +1,13 @@
-"""RunConfig: hash every input that can change a bench score.
-
-A score delta is only attributable when you can show what changed between
-two runs. The RunConfig records a hash of each tunable input (assembled
-system prompt, every active skill file, the instantiated Julia manifest)
-plus the code version and dependency versions. Two runs that differ in
-exactly one hash answer "did that change help?" mechanically; runs from a
-dirty working tree are labelled so they are never mistaken for clean
-comparisons.
-"""
+"""Recorded inputs for reproducible evaluation runs."""
 
 from __future__ import annotations
 
 import hashlib
+import json
 import platform
 import subprocess
 import sys
+import tomllib
 from importlib import metadata
 from pathlib import Path
 from typing import Any
@@ -47,6 +40,28 @@ def _dist_version(name: str) -> str | None:
         return metadata.version(name)
     except metadata.PackageNotFoundError:
         return None
+
+
+def julia_environment_sha256(project: Path) -> str:
+    """Hash the lockfiles and local sources that the run archive preserves."""
+    root = project.resolve()
+    manifest = tomllib.loads((root / "Manifest.toml").read_text())
+    for entries in manifest.get("deps", {}).values():
+        for entry in entries:
+            if "path" in entry and not (root / entry["path"]).resolve().is_relative_to(root):
+                raise ValueError("Julia path dependencies must be inside the archived project")
+    files = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if any(part.startswith(".") or part == "__pycache__" for part in relative.parts):
+            continue
+        if path.is_symlink():
+            raise ValueError(f"Julia environment refuses symlink: {relative}")
+        if path.is_file():
+            files[relative.as_posix()] = _sha256_file(path)
+    if "Project.toml" not in files:
+        raise ValueError("Julia environment requires Project.toml")
+    return _sha256_text(json.dumps(files, sort_keys=True))
 
 
 def _skill_hashes(adapter: Any) -> dict[str, str]:
@@ -107,6 +122,7 @@ def build_runconfig(
         "skills_sha256": _skill_hashes(adapter),
         "simulator": adapter.name,
         "context_window": context_window,
+        "context_policy": "unscaled-full-request-budget-latest-pair-at-32k-v5",
         "path_policy": "agent-visible-to-real-path-resolution-v1",
         "tool_scheduling": TOOL_SCHEDULING_POLICY
         if strategies.sequential_tools
@@ -114,9 +130,20 @@ def build_runconfig(
         "manifest_sha256": (
             _sha256_file(manifest) if manifest is not None and manifest.exists() else None
         ),
+        "julia_environment_sha256": julia_environment_sha256(julia_project)
+        if manifest is not None and manifest.exists()
+        else None,
         "deps": {
             name: _dist_version(name)
-            for name in ("deepagents", "langchain", "langgraph", "inspect-ai")
+            for name in (
+                "deepagents",
+                "langchain",
+                "langchain-core",
+                "langchain-openai",
+                "langchain-anthropic",
+                "langgraph",
+                "inspect-ai",
+            )
         },
         "runtime": {
             "python": sys.version.split()[0],

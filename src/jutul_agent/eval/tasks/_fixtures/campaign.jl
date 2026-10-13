@@ -33,6 +33,12 @@ function run_campaign_case(name::AbstractString)
     )
     parameters[:Reservoir][:PhaseViscosities][1, :] .= 1e-3
     parameters[:Reservoir][:PhaseViscosities][2, :] .= 5e-3
+    reference_pressure = 101325.0
+    compressibility = 1e-10
+    density = ConstantCompressibilityDensities(
+        system, reference_pressure, [1000.0, 850.0], compressibility,
+    )
+    replace_variables!(model; PhaseMassDensities = density)
     state0 = setup_reservoir_state(
         model;
         Pressure = 150 * bar,
@@ -49,31 +55,52 @@ function run_campaign_case(name::AbstractString)
         model;
         control = Dict(:Injector => injector_control, :Producer => producer_control),
     )
-    _, states, _ = simulate_reservoir(
+    wells, states, _ = simulate_reservoir(
         state0,
         model,
         timesteps;
         parameters = parameters,
         forces = forces,
         info_level = -1,
+        output_substates = true,
+        tol_cnv = 1e-6,
+        tol_mb = 1e-10,
+        tol_cnv_well = 1e-7,
+        tol_mb_well = 1e-10,
     )
 
+    isapprox(wells.time[end], sum(timesteps); rtol = 1e-10) || error("incomplete simulation")
     pore_volumes = pore_volume(model, parameters)
-    initial_oil = sum(pore_volumes)
+    initial_oil_mass = sum(pore_volumes) * 850.0 * exp(
+        (150 * bar - reference_pressure) * compressibility,
+    )
+    elapsed = diff(vcat(0.0, wells.time))
+    produced_oil_mass = cumsum(-wells[:Producer, :Liquid_mass_rate] .* elapsed)
+    recovery_history = produced_oil_mass ./ initial_oil_mass
+    peak_pressure = max(150.0, maximum(maximum(state[:Pressure]) / bar for state in states))
+    history = String["time_days,recovery_factor,max_pressure_bar"]
     for (step, state) in enumerate(states)
-        oil = sum(pore_volumes .* state[:Saturations][2, :])
-        recovery = (initial_oil - oil) / initial_oil
+        recovery = recovery_history[step]
         pressure = state[:Pressure] ./ bar
+        push!(history, join((wells.time[step] / day, recovery, maximum(pressure)), ','))
         println(
             "run=$name step=$step recovery=$(round(recovery; digits=8)) " *
             "avg_pressure_bar=$(round(mean(pressure); digits=5)) " *
             "max_pressure_bar=$(round(maximum(pressure); digits=5))",
         )
     end
-
     final_state = states[end]
-    oil = sum(pore_volumes .* final_state[:Saturations][2, :])
-    recovery = (initial_oil - oil) / initial_oil
+    final_oil_mass = sum(final_state[:TotalMasses][2, :])
+    balance_error = abs(initial_oil_mass - final_oil_mass - produced_oil_mass[end]) / initial_oil_mass
+    balance_error < 1e-3 || error("oil mass balance error exceeds 0.1%: $balance_error")
+    recovery = recovery_history[end]
+    mkpath("diagnostics")
+    write(joinpath("diagnostics", "$name-history.csv"), join(history, '\n') * "\n")
+    write(
+        joinpath("diagnostics", "$name.csv"),
+        "initial_oil_mass_kg,produced_oil_mass_kg,final_oil_mass_kg,mass_balance_relative_error,peak_pressure_bar\n" *
+        join((initial_oil_mass, produced_oil_mass[end], final_oil_mass, balance_error, peak_pressure), ',') * "\n",
+    )
     pressure = final_state[:Pressure] ./ bar
     water = final_state[:Saturations][1, :]
     average_pressure = mean(pressure)
@@ -101,7 +128,9 @@ function run_campaign_case(name::AbstractString)
         )
     end
     mkpath("results")
-    write(joinpath("results", "$name.csv"), join(rows, '\n') * "\n")
+    artifact = joinpath("results", "$name.csv")
+    write(artifact * ".tmp", join(rows, '\n') * "\n")
+    mv(artifact * ".tmp", artifact; force = true)
     summary = (
         run_id = name,
         porosity = config.porosity,
@@ -115,8 +144,11 @@ function run_campaign_case(name::AbstractString)
 end
 
 function run_campaign_case_with_ledger(name::AbstractString)
-    summary = run_campaign_case(name)
     ledger = "campaign-index.csv"
+    if isfile(ledger) && any(row -> first(split(row, ',')) == name, readlines(ledger)[2:end])
+        error("completed case already recorded: $name")
+    end
+    summary = run_campaign_case(name)
     artifact = joinpath("results", "$(summary.run_id).csv")
     if !isfile(ledger)
         write(
@@ -169,20 +201,7 @@ function run_autonomous_campaign_case(name::AbstractString)
     )
     if completed_count == length(AUTONOMOUS_CAMPAIGN_CASES)
         println(
-            "verification_gate_id=campaign-evidence-v2 campaign_complete=true",
-        )
-        println(
-            "verification_step_1=pending tool=read_file " *
-            "path=$(summary.ledger_path) " *
-            "purpose=select_constrained_winner_and_copy_exact_values",
-        )
-        println(
-            "verification_step_2=pending_after_step_1 tool=grep " *
-            "path=selected_artifact_path pattern=,150, " *
-            "purpose=retrieve_cell_150_water_saturation",
-        )
-        println(
-            "completion_rule=do_not_answer_until_both_verification_steps_are_observed",
+            "Campaign complete. Read $(summary.ledger_path), then grep the selected result file.",
         )
     end
     return merge(summary, (completed_count = completed_count,))

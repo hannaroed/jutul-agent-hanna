@@ -9,6 +9,7 @@ import shutil
 import sqlite3
 import subprocess
 import tarfile
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -64,11 +65,15 @@ def capture_source(root: Path, snapshots: Path) -> dict[str, str]:
     files = {}
     for name in sorted(names):
         path = root / name
-        if not path.exists():
-            continue  # Deleted tracked files are absent from the runnable snapshot.
-        if path.is_symlink():
+        relative = Path(name)
+        if any(part.startswith(".env") for part in relative.parts):
+            continue
+        if any(parent.is_symlink() for parent in [path, *path.parents] if parent != root):
             raise ValueError(f"source snapshot refuses symlink: {name}")
-        if path.is_file() and not path.name.startswith(".env"):
+        if not path.exists():
+            continue
+        path.resolve().relative_to(root.resolve())
+        if path.is_file():
             files[name] = path.read_bytes()
     manifest = {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}
     identifier = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
@@ -76,7 +81,8 @@ def capture_source(root: Path, snapshots: Path) -> dict[str, str]:
     destination.mkdir(parents=True, exist_ok=True)
     archive = destination / "source.tar"
     if not archive.exists():
-        temporary = destination / "source.tmp"
+        with tempfile.NamedTemporaryFile(dir=destination, delete=False) as temporary_file:
+            temporary = Path(temporary_file.name)
         with tarfile.open(temporary, "w") as bundle:
             for name, data in files.items():
                 entry = tarfile.TarInfo(name)
@@ -98,6 +104,8 @@ def capture_source(root: Path, snapshots: Path) -> dict[str, str]:
 
 def archive_tree(source: Path, destination: Path) -> None:
     """Copy regular files only; SQLite backups include any uncheckpointed WAL."""
+    if destination.resolve().is_relative_to(source.resolve()):
+        raise ValueError("archive destination must be outside the source tree")
     destination.mkdir(parents=True, exist_ok=True)
     for path in source.rglob("*"):
         relative = path.relative_to(source)
@@ -111,7 +119,7 @@ def archive_tree(source: Path, destination: Path) -> None:
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         if path.suffix == ".sqlite":
-            reader = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            reader = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
             writer = sqlite3.connect(target)
             try:
                 reader.backup(writer)
@@ -137,7 +145,29 @@ def inventory_archive(destination: Path) -> dict[str, str]:
     manifest = {
         path.relative_to(destination).as_posix(): sha256(path)
         for path in sorted(destination.rglob("*"))
-        if path.is_file() and path.name != "manifest.json"
+        if path.is_file() and path != destination / "manifest.json"
     }
     write_json(destination / "manifest.json", manifest)
     return manifest
+
+
+def finalize_log(path: Path) -> None:
+    """Save graded sample results beside the execution archive."""
+    from inspect_ai.log import read_eval_log
+
+    log = read_eval_log(path)
+    for sample in log.samples or []:
+        archive = (sample.store or {}).get("jutul/archive")
+        if not archive:
+            continue
+        destination = Path(archive)
+        write_json(destination / "result.json", sample.model_dump(mode="json"))
+        write_json(
+            destination / "eval-log.json",
+            {
+                "path": str(path.resolve()),
+                "sha256": sha256(path),
+                "eval": log.eval.model_dump(mode="json"),
+            },
+        )
+        inventory_archive(destination)

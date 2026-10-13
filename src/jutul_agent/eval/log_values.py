@@ -2,6 +2,13 @@
 
 from typing import Any
 
+REQUIRED_SCORES = (
+    "campaign_winner",
+    "numeric_values_close",
+    "tool_result_numeric_evidence",
+    "campaign_integrity",
+)
+
 
 def score_value(sample: Any, name: str) -> Any:
     """Return a scorer's value, or ``None`` when the scorer is absent."""

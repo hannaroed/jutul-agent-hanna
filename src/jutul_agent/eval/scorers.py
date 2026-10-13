@@ -12,6 +12,7 @@ import csv
 import io
 import json
 import re
+from itertools import pairwise
 from pathlib import Path
 
 from inspect_ai.scorer import (
@@ -27,11 +28,20 @@ from inspect_ai.scorer import (
 )
 from inspect_ai.solver import TaskState
 
+from jutul_agent.eval.campaign_validation import (
+    LEDGER_COLUMNS,
+    artifact_rows,
+    compare_reference,
+    csv_rows,
+    output_csv,
+    validate_ledger,
+)
 from jutul_agent.eval.solver import STORE_OUTPUT_DIR, STORE_TRACE_DB, STORE_WORKSPACE
 from jutul_agent.eval.trace_checks import (
     campaign_calls,
     case_coverage_problems,
     finite_number,
+    literal_julia_call,
     result_succeeded,
     tool_exchanges,
 )
@@ -108,7 +118,11 @@ def _answer_object(text: str) -> dict | None:
     if text.startswith("```json\n") and text.endswith("\n```"):
         text = text[8:-4]
     try:
-        answer = json.loads(text, object_pairs_hook=unique_fields)
+        answer = json.loads(
+            text,
+            object_pairs_hook=unique_fields,
+            parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
+        )
     except (TypeError, ValueError):
         return None
     return answer if isinstance(answer, dict) else None
@@ -236,87 +250,196 @@ def julia_code_matches(pattern: str) -> Scorer:
 
 
 @scorer(metrics=[accuracy()])
-def julia_case_call_coverage(
-    function: str,
-    cases: tuple[str, ...],
-    expected_counts: tuple[int, ...] | None = None,
-) -> Scorer:
-    """Require direct sequential attempts and one successful result per case."""
-    expected_counts = expected_counts if expected_counts is not None else (1,) * len(cases)
-    if len(expected_counts) != len(cases):
-        raise ValueError("expected_counts must have one entry per case")
-    if len(set(cases)) != len(cases) or any(count < 1 for count in expected_counts):
-        raise ValueError("cases must be unique and expected counts must be positive")
-    expected = dict(zip(cases, expected_counts, strict=True))
+def campaign_integrity() -> Scorer:
+    """Check all cases, their artifacts, the complete ledger, and targeted retrieval."""
 
     async def score(state: TaskState, target: Target) -> Score:
-        problems = case_coverage_problems(_trace_events(state), function, expected)
-        return Score(
-            value=INCORRECT if problems else CORRECT,
-            explanation="; ".join(problems) or "all cases completed once with sequential results",
-        )
-
-    return score
-
-
-@scorer(metrics=[accuracy()])
-def julia_case_recovered_from_ledger(
-    function: str,
-    case: str,
-    ledger: str = "campaign-index.csv",
-) -> Scorer:
-    """Require a failed attempt, successful checkpoint read, and successful retry."""
-
-    async def score(state: TaskState, target: Target) -> Score:
+        contract = state.metadata.get("campaign_contract")
+        root = state.store.get(STORE_WORKSPACE)
+        if not contract or not root:
+            return Score(value=INCORRECT, explanation="campaign contract/workspace unavailable")
+        workspace = Path(root).resolve()
         events = _trace_events(state)
+        function = contract["function"]
         calls, problems = campaign_calls(events, function)
-        attempts = [pair for argument, pair in calls if argument == case]
-        if len(attempts) != 2:
-            problems.append(f"expected two {case} calls, found {len(attempts)}")
-        else:
-            first, retry = attempts
-            if result_succeeded(first.result):
-                problems.append("first attempt did not fail")
-            if not result_succeeded(retry.result):
-                problems.append("retry did not succeed")
-            reads = [
-                pair
-                for pair in tool_exchanges(events)
-                if first.end < pair.start < pair.end < retry.start
-                and pair.call.payload.get("name") == "read_file"
-                and _workspace_tool_path(state, pair.call, "file_path") == ledger
-                and result_succeeded(pair.result)
-                and str(pair.result.payload.get("content", "")).strip()
-            ]
-            if not reads:
-                problems.append(f"no successful {ledger} read completed before retry")
-        return Score(
-            value=INCORRECT if problems else CORRECT,
-            explanation="; ".join(problems)
-            or f"{case} recovered after a successful checkpoint read",
+        runtime_errors = []
+        cases = contract["cases"]
+        problems.extend(case_coverage_problems(events, function, dict.fromkeys(cases, 1)))
+        for argument, pair in calls:
+            if argument in cases and not result_succeeded(pair.result):
+                runtime_errors.append(f"supplied campaign function failed for {argument}")
+        completed = [(argument, pair) for argument, pair in calls if result_succeeded(pair.result)]
+        if len(completed) != len(cases):
+            problems.append("not all required simulations succeeded")
+        includes = []
+        pairs = tool_exchanges(events)
+        private_roots = [Path(__file__).resolve().parent]
+        project = Path(__file__).resolve().parents[3]
+        if (project / "src/jutul_agent").exists():
+            private_roots.append(project)
+        from jutul_agent.paths import PACKAGE_ROOT, SHARED_SKILLS_DIR
+        from jutul_agent.simulators.registry import get as simulator
+
+        adapter = simulator(state.metadata.get("simulator", "jutuldarcy"))
+        allowed_roots = [
+            workspace,
+            SHARED_SKILLS_DIR,
+            adapter.skills_dir,
+            PACKAGE_ROOT / "julia_runtime",
+            adapter.julia_env_template_path,
+        ]
+        if trace := state.store.get(STORE_TRACE_DB):
+            allowed_roots.extend(
+                Path(trace).parent / name for name in ("conversation_history", "large_tool_results")
+            )
+        allowed_roots = [path.resolve() for path in allowed_roots]
+        private_roots.extend(
+            Path(path).resolve() for path in state.metadata.get("evaluation_private_roots", [])
         )
-
-    return score
-
-
-@scorer(metrics=[accuracy()])
-def julia_function_call_count(function: str, expected: int) -> Scorer:
-    """Require exactly the budgeted direct sequential calls, all successful."""
-    if expected < 1:
-        raise ValueError("expected must be positive")
-
-    async def score(state: TaskState, target: Target) -> Score:
-        calls, problems = campaign_calls(_trace_events(state), function)
-        if len(calls) != expected:
-            problems.append(f"expected {expected} calls, found {len(calls)}")
-        if any(not result_succeeded(pair.result) for _, pair in calls):
-            problems.append("a campaign call failed")
-        arguments = [argument for argument, _ in calls]
-        if len(set(arguments)) != len(arguments):
-            problems.append("a campaign argument was repeated")
+        archive = state.store.get("jutul/archive")
+        source = state.store.get("jutul/source") or {}
+        if archive:
+            private_roots.append(Path(archive).parent.resolve())
+        if source.get("archive"):
+            private_roots.append(Path(source["archive"]).resolve().parents[1])
+        if len(workspace.parents) > 1 and workspace.parents[1].name == "jutul-agent-eval":
+            private_roots.append(workspace.parents[1])
+        if sum(event.kind == schema.TOOL_CALL for event in events) != len(pairs):
+            problems.append("tool call missing a unique result")
+        for pair in pairs:
+            name = pair.call.payload.get("name")
+            if name in ("read_file", "grep", "glob", "ls"):
+                args = pair.call.payload.get("args") or {}
+                raw = args.get("file_path" if name == "read_file" else "path")
+                if isinstance(raw, str):
+                    resolved = (
+                        resolve_in_workspace(raw, workspace=workspace)
+                        or (workspace / raw).resolve()
+                    )
+                    recursive = name in ("grep", "glob", "ls")
+                    private = any(
+                        part in ("eval-archives", "eval-sources", "eval-logs")
+                        for part in resolved.parts
+                    ) or any(
+                        resolved.is_relative_to(root)
+                        or (recursive and root.is_relative_to(resolved))
+                        for root in private_roots
+                    )
+                    if private and not any(resolved.is_relative_to(root) for root in allowed_roots):
+                        problems.append(
+                            "retrieval accessed private evaluation data or another trial"
+                        )
+            if name in ("run_julia", "plot_julia"):
+                literal = literal_julia_call(
+                    str((pair.call.payload.get("args") or {}).get("code", ""))
+                )
+                if (
+                    literal is not None
+                    and literal[0] == "include"
+                    and isinstance(literal[1], str)
+                    and (workspace / literal[1]).resolve() == (workspace / "campaign.jl").resolve()
+                ):
+                    includes.append(pair)
+                elif literal is None or literal[0] != function:
+                    problems.append("Julia code outside the campaign protocol")
+            if name in ("execute", "write_file", "edit_file", "delete_file", "reset_julia"):
+                problems.append(f"campaign used forbidden tool {name}")
+        if len(includes) != 1 or not result_succeeded(includes[0].result):
+            problems.append("fixture must be included successfully once")
+            if len(includes) == 1 and not result_succeeded(includes[0].result):
+                runtime_errors.append("supplied campaign fixture failed to load")
+        elif calls and includes[0].end >= calls[0][1].start:
+            problems.append("campaign started before setup completed")
+        if any(left.end > right.start for left, right in pairwise(pairs)):
+            problems.append("overlapping tool calls")
+        fixture = (state.metadata.get("fixtures") or {}).get("campaign.jl")
+        artifacts = {}
+        try:
+            if (workspace / "campaign.jl").read_text() != fixture:
+                raise ValueError("campaign fixture was modified")
+            found = {path.stem for path in (workspace / "results").glob("*.csv")}
+            completed_cases = {arg for arg, _ in completed}
+            if missing := completed_cases - found:
+                runtime_errors.append(f"completed calls produced no artifact: {sorted(missing)}")
+            if found != set(cases):
+                raise ValueError("result artifact set mismatch")
+            for case in cases:
+                try:
+                    rows = artifact_rows(
+                        workspace / "results" / f"{case}.csv", case, contract.get("cell_count", 192)
+                    )
+                    reference = (state.metadata.get("reference_artifacts") or {}).get(case)
+                    if reference is not None:
+                        compare_reference(rows, reference)
+                except (OSError, ValueError, csv.Error) as error:
+                    if case in completed_cases:
+                        runtime_errors.append(f"{case}: invalid completed artifact: {error}")
+                    raise
+                artifacts[case] = rows
+            last_result = max((pair.end for _, pair in completed), default=-1)
+            ledger = "campaign-index.csv"
+            saved_rows = csv_rows((workspace / ledger).read_text(), LEDGER_COLUMNS)
+            validate_ledger(saved_rows, artifacts)
+            valid_reads = []
+            for pair in pairs:
+                if (
+                    pair.call.payload.get("name") == "read_file"
+                    and _workspace_tool_path(state, pair.call, "file_path") == ledger
+                    and result_succeeded(pair.result)
+                ):
+                    try:
+                        rows = csv_rows(
+                            output_csv(str(pair.result.payload.get("content", ""))),
+                            LEDGER_COLUMNS,
+                        )
+                        observed = {
+                            arg: artifacts[arg]
+                            for arg, prior in completed
+                            if prior.end < pair.start
+                        }
+                        validate_ledger(rows, observed)
+                        valid_reads.append(pair)
+                    except (ValueError, csv.Error):
+                        continue
+            final_reads = [pair for pair in valid_reads if pair.start > last_result]
+            if not final_reads:
+                problems.append("no complete ledger read after simulations finished")
+            truth = _answer_object(target.text) or {}
+            selected = truth.get("run_id")
+            artifact = f"results/{selected}.csv"
+            cell = str(state.metadata.get("query_cell_id", 150))
+            row = next(row for row in artifacts[selected] if row["cell_id"] == cell)
+            verified = False
+            for pair in pairs:
+                if (
+                    _workspace_tool_path(state, pair.call, "file_path") == artifact
+                    and pair.call.payload.get("name") == "read_file"
+                ):
+                    problems.append("detailed artifact read instead of targeted grep")
+                if (
+                    pair.call.payload.get("name") != "grep"
+                    or not result_succeeded(pair.result)
+                    or _workspace_tool_path(state, pair.call, "path") != artifact
+                    or (pair.call.payload.get("args") or {}).get("pattern") != f",{cell},"
+                ):
+                    continue
+                lines = [
+                    re.sub(r"^\s*\d+(?::\s*|\t| {2})", "", line)
+                    for line in str(pair.result.payload.get("content", "")).splitlines()
+                    if "," in line
+                ]
+                expected_line = ",".join(row.values())
+                if lines == [expected_line] and any(read.end < pair.start for read in final_reads):
+                    verified = True
+            if not verified:
+                problems.append("no isolated selected row retrieved after complete ledger read")
+        except (OSError, ValueError, KeyError, StopIteration, csv.Error) as error:
+            problems.append(str(error))
         return Score(
             value=INCORRECT if problems else CORRECT,
-            explanation="; ".join(problems) or f"{function} ran {expected} times sequentially",
+            explanation="; ".join(dict.fromkeys(problems))
+            or "complete campaign and ordered evidence verified",
+            metadata={"runtime_errors": runtime_errors},
         )
 
     return score
@@ -476,9 +599,9 @@ def numeric_values_close(
     expected: tuple[float, ...],
     tol: float | tuple[float, ...],
     *,
-    fields: tuple[str, ...] | None = None,
+    fields: tuple[str, ...],
 ) -> Scorer:
-    """Check named quantities, or number presence when fields are omitted."""
+    """Check each named JSON quantity against its reference and tolerance."""
     tolerances = (tol,) * len(expected) if isinstance(tol, (int, float)) else tol
     if len(tolerances) != len(expected):
         raise ValueError("tol must be a scalar or have one entry per expected value")
@@ -486,40 +609,24 @@ def numeric_values_close(
         not finite_number(value) or value < 0 for value in tolerances
     ):
         raise ValueError("expected values and nonnegative tolerances must be finite")
-    if fields is not None and (len(fields) != len(expected) or len(set(fields)) != len(fields)):
+    if len(fields) != len(expected) or len(set(fields)) != len(fields):
         raise ValueError("fields must have one unique name per expected value")
 
     async def score(state: TaskState, target: Target) -> Score:
-        if fields is not None:
-            answer = _answer_object(state.output.completion)
-            target_object = _answer_object(target.text)
-            truth = target_object or dict(zip(fields, expected, strict=True))
-            problems = []
-            if target_object is not None and (answer is None or set(answer) != set(truth)):
-                problems.append("final answer must contain exactly the target field names")
-            for field, tolerance in zip(fields, tolerances, strict=True):
-                got = answer.get(field) if answer is not None else None
-                want = truth.get(field)
-                if not finite_number(got) or not finite_number(want) or abs(got - want) > tolerance:
-                    problems.append(f"{field}: expected {want} ±{tolerance}, got {got}")
-            return Score(
-                value=INCORRECT if problems else CORRECT,
-                explanation="; ".join(problems) or "all named quantities match",
-            )
-        values = _answer_numbers(state.output.completion)
-        missing = [
-            (want, tolerance)
-            for want, tolerance in zip(expected, tolerances, strict=True)
-            if not any(abs(got - want) <= tolerance for got in values)
-        ]
-        contract = list(zip(expected, tolerances, strict=True))
+        answer = _answer_object(state.output.completion)
+        target_object = _answer_object(target.text)
+        truth = target_object or dict(zip(fields, expected, strict=True))
+        problems = []
+        if target_object is not None and (answer is None or set(answer) != set(truth)):
+            problems.append("final answer must contain exactly the target field names")
+        for field, tolerance in zip(fields, tolerances, strict=True):
+            got = answer.get(field) if answer is not None else None
+            want = truth.get(field)
+            if not finite_number(got) or not finite_number(want) or abs(got - want) > tolerance:
+                problems.append(f"{field}: expected {want} ±{tolerance}, got {got}")
         return Score(
-            value=CORRECT if not missing else INCORRECT,
-            explanation=(
-                f"found values within expected tolerances: {contract}"
-                if not missing
-                else f"missing (value, tolerance) {missing}; answer numbers: {values or 'none'}"
-            ),
+            value=INCORRECT if problems else CORRECT,
+            explanation="; ".join(problems) or "all named quantities match",
         )
 
     return score
@@ -705,21 +812,15 @@ def tool_result_numeric_evidence(
     tol: float,
     *,
     tools: tuple[str, ...] = ("read_file", "grep"),
-    required_text: tuple[str, ...] = (),
-    csv_columns: tuple[str, ...] | None = None,
-    value_columns: tuple[str, ...] | None = None,
+    csv_columns: tuple[str, ...],
+    value_columns: tuple[str, ...],
     answer_fields: tuple[str, ...] | None = None,
-    artifact: str | None = None,
-    row_key: dict[str, str] | None = None,
+    artifact: str,
+    row_key: dict[str, str],
 ) -> Scorer:
-    """Require successful, paired retrieval; optionally validate an exact CSV row."""
-    if csv_columns is not None and (
-        value_columns is None
-        or len(value_columns) != len(expected)
-        or artifact is None
-        or row_key is None
-    ):
-        raise ValueError("CSV evidence needs value_columns, artifact, and row_key")
+    """Require a successful retrieval of the exact row in the saved CSV."""
+    if len(value_columns) != len(expected):
+        raise ValueError("value_columns must have one name per expected value")
     if answer_fields is not None and len(answer_fields) != len(expected):
         raise ValueError("answer_fields must have one name per expected value")
 
@@ -727,57 +828,45 @@ def tool_result_numeric_evidence(
         truth = _answer_object(target.text) or {}
         selected = truth.get("run_id")
         selected_artifact = f"results/{selected}.csv" if selected is not None else artifact
-        keys = {**(row_key or {})}
+        keys = dict(row_key)
         if selected is not None and "run_id" in keys:
             keys["run_id"] = selected
         metadata = getattr(state, "metadata", {}) or {}
         if "cell_id" in keys:
             keys["cell_id"] = str(metadata.get("query_cell_id", keys["cell_id"]))
-        wants = (
-            tuple(
-                truth.get(field, want)
-                for field, want in zip(answer_fields or value_columns or (), expected, strict=True)
-            )
-            if value_columns is not None
-            else expected
+        wants = tuple(
+            truth.get(field, want)
+            for field, want in zip(answer_fields or value_columns or (), expected, strict=True)
         )
-        canonical_rows = []
-        if csv_columns is not None:
-            root = state.store.get(STORE_WORKSPACE)
-            if not root:
-                return Score(value=INCORRECT, explanation="workspace unavailable")
-            path = Path(root) / str(selected_artifact)
-            try:
-                with path.open(encoding="utf-8", newline="") as stream:
-                    reader = csv.DictReader(stream)
-                    if tuple(reader.fieldnames or ()) != csv_columns:
-                        return Score(value=INCORRECT, explanation="artifact CSV schema mismatch")
-                    canonical_rows = [
-                        row
-                        for row in reader
-                        if all(row.get(key) == value for key, value in keys.items())
-                    ]
-            except (OSError, csv.Error):
-                return Score(value=INCORRECT, explanation="artifact unavailable")
-            if len(canonical_rows) != 1:
-                return Score(value=INCORRECT, explanation="artifact row missing or ambiguous")
+        root = state.store.get(STORE_WORKSPACE)
+        if not root:
+            return Score(value=INCORRECT, explanation="workspace unavailable")
+        path = Path(root) / str(selected_artifact)
+        try:
+            with path.open(encoding="utf-8", newline="") as stream:
+                reader = csv.DictReader(stream)
+                if tuple(reader.fieldnames or ()) != csv_columns:
+                    return Score(value=INCORRECT, explanation="artifact CSV schema mismatch")
+                canonical_rows = [
+                    row
+                    for row in reader
+                    if all(row.get(key) == value for key, value in keys.items())
+                ]
+        except (OSError, csv.Error):
+            return Score(value=INCORRECT, explanation="artifact unavailable")
+        if len(canonical_rows) != 1:
+            return Score(value=INCORRECT, explanation="artifact row missing or ambiguous")
 
         for pair in tool_exchanges(_trace_events(state)):
             name = pair.call.payload.get("name")
             if name not in tools or not result_succeeded(pair.result):
                 continue
             content = str(pair.result.payload.get("content", ""))
-            if csv_columns is None:
-                if all(fragment in content for fragment in required_text):
-                    numbers = _answer_numbers(content)
-                    if all(any(abs(got - want) <= tol for got in numbers) for want in wants):
-                        return Score(value=CORRECT, explanation=f"successful {name} exposed values")
-                continue
             key = "path" if name == "grep" else "file_path"
             if _workspace_tool_path(state, pair.call, key) != selected_artifact:
                 continue
             for line in content.splitlines():
-                line = re.sub(r"^\s*\d+:\s*", "", line)
+                line = re.sub(r"^\s*\d+(?::\s*|\t| {2})", "", line)
                 try:
                     cells = next(csv.reader(io.StringIO(line), strict=True))
                     if len(cells) != len(csv_columns):
@@ -785,7 +874,7 @@ def tool_result_numeric_evidence(
                     row = dict(zip(csv_columns, cells, strict=True))
                     if row != canonical_rows[0]:
                         continue
-                    values = [float(row[field]) for field in value_columns or ()]
+                    values = [float(row[field]) for field in value_columns]
                 except (csv.Error, ValueError, KeyError, StopIteration):
                     continue
                 if all(
@@ -861,20 +950,6 @@ def workspace_file_exists(pattern: str, *, min_size: int = 1) -> Scorer:
                 if matches
                 else f"no non-empty workspace file matched {pattern!r}"
             ),
-        )
-
-    return score
-
-
-@scorer(metrics=[accuracy()])
-def workspace_file_count(pattern: str, expected: int, *, min_size: int = 1) -> Scorer:
-    """Pass when exactly ``expected`` non-empty workspace files match ``pattern``."""
-
-    async def score(state: TaskState, target: Target) -> Score:
-        matches = _workspace_files(state, pattern, min_size)
-        return Score(
-            value=CORRECT if len(matches) == expected else INCORRECT,
-            explanation=f"expected {expected} files matching {pattern!r}: {matches}",
         )
 
     return score

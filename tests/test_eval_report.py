@@ -33,6 +33,21 @@ def test_classify_ignores_numeric_efficiency_scorers() -> None:
     assert failed == ["numeric_close"]
 
 
+def test_campaign_with_missing_checks_cannot_be_reported_as_pass():
+    from types import SimpleNamespace
+
+    from jutul_agent.eval.comparison_report import REQUIRED_SCORES
+
+    sample = SimpleNamespace(
+        error=None, limit=None, metadata={"campaign_contract": {"ledger": True}}
+    )
+    scores = dict.fromkeys(REQUIRED_SCORES, "C")
+    assert _classify(sample, scores)[0] == "pass"
+    for name in REQUIRED_SCORES:
+        incomplete = {key: value for key, value in scores.items() if key != name}
+        assert _classify(sample, incomplete)[:2] == ("fail", "unscored")
+
+
 def test_numeric_score_reads_trace_efficiency_values() -> None:
     from types import SimpleNamespace
 
@@ -189,3 +204,21 @@ def test_price_uses_cache_read_rate() -> None:
 
 def test_unknown_model_has_no_price() -> None:
     assert _price("ollama/qwen3", {"in": 1, "out": 1, "cr": 0, "cw": 0}) is None
+
+
+def test_empty_scores_and_limits_cannot_pass():
+    from types import SimpleNamespace
+
+    assert _classify(SimpleNamespace(error=None, limit=None), {})[:2] == ("fail", "unscored")
+    assert _classify(SimpleNamespace(error=None, limit="time"), {"answer": "C"})[:2] == (
+        "fail",
+        "budget",
+    )
+
+
+def test_pass_rate_counts_infrastructure_errors():
+    page = render_markdown(
+        [_record(run="one"), _record(run="two", verdict="infra", category="infra")]
+    )
+    assert 'class="bench-partial">1/2' in page
+    assert "including infrastructure errors" in page

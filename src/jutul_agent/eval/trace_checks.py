@@ -62,7 +62,16 @@ def literal_julia_call(code: str) -> tuple[str, Any] | None:
     match = _DIRECT_CALL.fullmatch(without_julia_comments(code).strip())
     if match is None:
         return None
-    return match[1], json.loads(match[2])
+    literal = match[2]
+    if literal.startswith('"') and "$" in literal:
+        return None
+    try:
+        argument = json.loads(literal)
+    except ValueError:
+        return None
+    if not finite_number(argument) and not isinstance(argument, str):
+        return None
+    return match[1], argument
 
 
 def result_succeeded(result: Event) -> bool:
@@ -154,4 +163,9 @@ def case_coverage_problems(
 
 
 def finite_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False

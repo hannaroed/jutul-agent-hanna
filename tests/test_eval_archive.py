@@ -72,3 +72,50 @@ def test_run_archive_keeps_artifacts_and_live_wal_trace(tmp_path):
     assert json.loads((destination / "manifest.json").read_text()) == manifest
     (workspace / "result.csv").unlink()
     assert "42" in (destination / "workspace/result.csv").read_text()
+
+
+def test_inventory_keeps_nested_manifests_and_escaped_sqlite_paths(tmp_path):
+    from jutul_agent.eval.archive import inventory_archive
+
+    workspace = tmp_path / "source"
+    workspace.mkdir()
+    (workspace / "manifest.json").write_text('{"artifact":true}')
+    with sqlite3.connect(workspace / "trace?#.sqlite") as connection:
+        connection.execute("create table checks (value text)")
+        connection.execute("insert into checks values ('preserved')")
+    destination = tmp_path / "archive"
+    finish_archive(destination, workspace)
+    manifest = inventory_archive(destination)
+    assert "workspace/manifest.json" in manifest
+    with sqlite3.connect(destination / "workspace/trace?#.sqlite") as connection:
+        assert connection.execute("select value from checks").fetchone()[0] == "preserved"
+
+
+def test_source_snapshot_excludes_secret_directories_and_symlinked_parents(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src/.env-secrets").mkdir(parents=True)
+    (repo / "src/.env-secrets/token.txt").write_text("SECRET")
+    (repo / "src/main.py").write_text("safe")
+    archive = capture_source(repo, tmp_path / "snapshots")
+    with tarfile.open(archive["archive"]) as bundle:
+        assert bundle.getnames() == ["src/main.py"]
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "file.py").write_text("outside")
+    (repo / "src/linked").symlink_to(outside, target_is_directory=True)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / "src/linked.py").symlink_to(outside / "file.py")
+    with pytest.raises(ValueError, match="symlink"):
+        capture_source(repo, tmp_path / "snapshots")
+
+
+@pytest.mark.parametrize("relative", [".", "nested/archive"])
+def test_archive_refuses_to_copy_into_its_own_source(tmp_path, relative):
+    from jutul_agent.eval.archive import archive_tree
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "result.csv").write_text("preserved")
+    with pytest.raises(ValueError, match="outside the source tree"):
+        archive_tree(source, source / relative)
+    assert list(source.iterdir()) == [source / "result.csv"]

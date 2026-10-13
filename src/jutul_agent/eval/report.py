@@ -32,7 +32,7 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from jutul_agent.eval.log_values import numeric_score
+from jutul_agent.eval.log_values import REQUIRED_SCORES, numeric_score
 from jutul_agent.paths import state_home
 
 # Prices in USD per million tokens, last reconciled on PRICES_AS_OF against
@@ -115,11 +115,16 @@ def _classify(sample, scores: dict[str, str]) -> tuple[str, str, list[str]]:
     if sample.error is not None:
         return "infra", "infra", []
     failed = [name for name, value in scores.items() if value == "I"]
+    if getattr(sample, "limit", None) is not None:
+        return "fail", "budget", failed
+    if (getattr(sample, "metadata", None) or {}).get("campaign_contract") and any(
+        scores.get(name) not in ("C", "I") for name in REQUIRED_SCORES
+    ):
+        return "fail", "unscored", failed
+    if not any(value in ("C", "I") for value in scores.values()):
+        return "fail", "unscored", []
     if not failed:
         return "pass", "pass", []
-    limit = getattr(sample, "limit", None)
-    if limit is not None:
-        return "fail", "budget", failed
     if all(name.startswith("julia_code_matches") for name in failed):
         return "fail", "mechanism", failed
     return "fail", "answer", failed
@@ -217,6 +222,7 @@ _CATEGORY_LABEL = {
     "mechanism": "serial / mechanism",
     "budget": "hit budget",
     "infra": "infra error",
+    "unscored": "unscored",
 }
 
 
@@ -274,13 +280,13 @@ def _matrix(w, records, models, short, row_key, row_label, rows) -> None:
     for row in rows:
         cells = []
         for m in models:
-            rs = [r for r in records if row_key(r) == row and r.model == m and r.verdict != "infra"]
+            rs = [r for r in records if row_key(r) == row and r.model == m]
             cells.append(_frac(sum(r.verdict == "pass" for r in rs), len(rs)))
         # Plain text (not a code span) so single-word labels don't wrap mid-word.
         w(f"| {row} | " + " | ".join(cells) + " |\n")
     totals = []
     for m in models:
-        done = [r for r in records if r.model == m and r.verdict != "infra"]
+        done = [r for r in records if r.model == m]
         totals.append(_frac(sum(r.verdict == "pass" for r in done), len(done)))
     w("| **all** | " + " | ".join(totals) + " |\n\n")
 
@@ -309,8 +315,9 @@ def render_markdown(records: list[SampleRecord]) -> str:
     # Overview: pass rate, cost, and wall time per model, all in one place.
     w("## Overview\n\n")
     w(
-        "Pass rate is passing runs over runs that completed (infrastructure errors "
-        "excluded). Tool calls and tokens are the per-run totals across the suite, "
+        "Pass rate is passing runs over all attempted runs, including infrastructure "
+        "errors and runs that hit a limit. Tool calls and tokens are the per-run totals "
+        "across the suite, "
         "the harness-efficiency signals: at equal pass rate, fewer means the harness "
         "got the agent there in less work. Input tokens note how many were served "
         "from the prompt cache (a cheap fraction of the input price); a model that "
@@ -359,7 +366,7 @@ def render_markdown(records: list[SampleRecord]) -> str:
         cost = f"${cost_run:.2f}" if cost_run is not None else "—"
         wall = f"{wall_run / 3600:.1f} h" if wall_run else "—"
         w(
-            f"| {short[m]} | {_frac(passed, len(done))} | {calls} | {file_ops} | "
+            f"| {short[m]} | {_frac(passed, len(rs))} | {calls} | {file_ops} | "
             f"{compactions} | {input_tok} | {output_tok} | {cost} | {wall} |\n"
         )
     w("\n")
@@ -425,7 +432,7 @@ def render_markdown(records: list[SampleRecord]) -> str:
         wall = f"{wall_run / 60:.0f} min" if wall_run else "—"
         w(
             f"| {_suite(task)} | `{sample}` | {rs[0].simulator or 'general'} | "
-            f"{short[model]} | {_frac(passed, len(done))} | {notes} | "
+            f"{short[model]} | {_frac(passed, len(rs))} | {notes} | "
             f"{calls} | {file_ops} | {compactions} | {filesystem_chars} | {input_tok} | "
             f"{output_tok} | {cost} | {wall} |\n"
         )

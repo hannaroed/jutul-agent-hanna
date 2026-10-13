@@ -22,6 +22,7 @@ Sample metadata understood by the solver:
 from __future__ import annotations
 
 import asyncio
+import logging
 import tempfile
 import uuid
 from collections.abc import Mapping
@@ -40,6 +41,7 @@ STORE_SESSION_ID = "jutul/session_id"
 STORE_OUTPUT_DIR = "jutul/output_dir"
 STORE_RUNCONFIG = "jutul/runconfig"
 STORE_ARCHIVE = "jutul/archive"
+STORE_SOURCE = "jutul/source"
 
 # One session at a time: the workspace root is process-global state
 # (``paths.set_workspace_root``), so concurrent samples would race on it.
@@ -82,17 +84,23 @@ def _bridge_model(context_window: int | None = None) -> Any:
     """
     from langchain.chat_models import init_chat_model
 
-    provider = str(get_model()).partition("/")[0]
+    target = get_model()
+    provider = str(target).partition("/")[0]
     if provider in ("google", "vertex"):
         from jutul_agent.eval import _gemini_compat
 
         _gemini_compat.apply()
         spec = "google_genai:inspect"
-    elif provider == "openai":
+    elif provider in ("openai", "openai-api"):
         spec = "openai:inspect"
     else:
         spec = "anthropic:inspect"
-    options = {"use_responses_api": True} if provider == "openai" else {}
+    options = (
+        {"use_responses_api": provider == "openai"} if provider in ("openai", "openai-api") else {}
+    )
+    max_tokens = getattr(getattr(target, "config", None), "max_tokens", None)
+    if isinstance(max_tokens, int) and max_tokens > 0:
+        options["max_tokens"] = max_tokens
     model = init_chat_model(
         spec,
         disable_streaming=True,
@@ -133,15 +141,6 @@ def _final_text(messages: list[Any]) -> str:
 # Simulators whose golden env has been built or re-resolved by this process;
 # the alignment check runs once per run, not once per sample.
 _ALIGNED_ENVS: set[str] = set()
-
-
-async def _run_prompts(runner: Any, prompt: str, follow_up_prompts: list[str]) -> Any:
-    result = await runner.run_prompt(prompt)
-    for follow_up in follow_up_prompts:
-        if result.interrupts:
-            break
-        result = await runner.run_prompt(follow_up)
-    return result
 
 
 def _golden_env(adapter: Any, simulator: str) -> Path:
@@ -193,7 +192,6 @@ async def _run_jutul_session(
     *,
     simulator: str,
     prompt: str,
-    follow_up_prompts: list[str],
     fixtures: Mapping[str, str],
     needs_env: bool,
     needs_display: bool,
@@ -211,8 +209,10 @@ async def _run_jutul_session(
     adapter = registry.get(simulator)
     workspace = scratch / "workspace"
     workspace.mkdir(parents=True)
+    store.set(STORE_WORKSPACE, str(workspace))
     for rel, content in fixtures.items():
-        path = workspace / rel.lstrip("/")
+        path = (workspace / rel).resolve()
+        path.relative_to(workspace.resolve())
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
     set_workspace_root(workspace)
@@ -307,7 +307,7 @@ async def _run_jutul_session(
         # ground truth, the sharpest signal an eval run offers.
         if ground_truth:
             host.session.trace.append(EVAL_TARGET, {"expected": ground_truth})
-        result = await _run_prompts(host.runner, prompt, follow_up_prompts)
+        result = await host.runner.run_prompt(prompt)
     finally:
         try:
             memory = host.session._ephemeral_memory_dir
@@ -334,7 +334,6 @@ def jutul_agent_solver(simulator: str = "jutuldarcy") -> Solver:
             not isinstance(context_window, int) or isinstance(context_window, bool)
         ):
             raise TypeError("sample metadata context_window must be an integer")
-        follow_up_prompts = list(state.metadata.get("follow_up_prompts", []))
         sim = state.metadata.get("simulator", simulator)
         from jutul_agent.agent.strategies import HarnessStrategies
         from jutul_agent.eval.archive import capture_source, finish_archive, write_json
@@ -349,6 +348,7 @@ def jutul_agent_solver(simulator: str = "jutuldarcy") -> Solver:
         if not (source_root / "src" / "jutul_agent").exists():
             source_root = Path(__file__).resolve().parents[2]
         source = await asyncio.to_thread(capture_source, source_root, state_home() / "eval-sources")
+        store.set(STORE_SOURCE, source)
         model = get_model()
         write_json(
             archive / "sample.json",
@@ -370,20 +370,25 @@ def jutul_agent_solver(simulator: str = "jutuldarcy") -> Solver:
         outcome = "error"
         try:
             async with _SESSION_LOCK, agent_bridge(agent_state):
-                final = await _run_jutul_session(
-                    simulator=sim,
-                    prompt=state.input_text,
-                    follow_up_prompts=follow_up_prompts,
-                    fixtures=fixtures,
-                    needs_env=needs_env,
-                    needs_display=needs_display,
-                    context_window=context_window,
-                    harness_strategies=strategies,
-                    julia_project_override=state.metadata.get("julia_project"),
-                    scratch=scratch,
-                    store=state.store,
-                    ground_truth=state.metadata.get("expected"),
-                )
+                from jutul_agent.paths import set_workspace_root, workspace_root
+
+                previous_workspace = workspace_root()
+                try:
+                    final = await _run_jutul_session(
+                        simulator=sim,
+                        prompt=state.input_text,
+                        fixtures=fixtures,
+                        needs_env=needs_env,
+                        needs_display=needs_display,
+                        context_window=context_window,
+                        harness_strategies=strategies,
+                        julia_project_override=state.metadata.get("julia_project"),
+                        scratch=scratch,
+                        store=state.store,
+                        ground_truth=state.metadata.get("expected"),
+                    )
+                finally:
+                    set_workspace_root(previous_workspace)
             outcome = "returned"
         except asyncio.CancelledError:
             outcome = "cancelled"
@@ -391,12 +396,18 @@ def jutul_agent_solver(simulator: str = "jutuldarcy") -> Solver:
         finally:
             trace_path = store.get(STORE_TRACE_DB)
             write_json(archive / "execution.json", {"outcome": outcome})
-            await asyncio.to_thread(
-                finish_archive,
-                archive,
-                scratch / "workspace",
-                session_dir=Path(trace_path).parent if trace_path else None,
-            )
+            try:
+                await asyncio.to_thread(
+                    finish_archive,
+                    archive,
+                    scratch / "workspace",
+                    session_dir=Path(trace_path).parent if trace_path else None,
+                )
+            except Exception as error:
+                if outcome == "returned":
+                    raise
+                logging.getLogger(__name__).exception("Failed to finish evaluation archive")
+                write_json(archive / "archive-error.json", {"error": str(error)})
 
         # The bridge tracked the real conversation; the completion graded by
         # scorers is the agent's own final message.
