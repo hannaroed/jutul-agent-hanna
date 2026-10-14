@@ -1,0 +1,30 @@
+{
+  "id": "chatcmpl-9453c9ab1a62a9a0",
+  "object": "chat.completion",
+  "created": 1791921710,
+  "model": "Qwen/Qwen3-8B",
+  "usage": {
+    "completion_tokens": 2048,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 1772,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens": 10535,
+    "prompt_tokens_details": null,
+    "total_tokens": 12583
+  },
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "length",
+      "message": {
+        "role": "assistant",
+        "content": "\n\n<tool_call>\n{\"name\": \"run_julia\", \"arguments\": {\"code\": \"run_autonomous_campaign_case(\\\"run-cedar\\\")\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"run_julia\", \"arguments\": {\"code\": \"run_autonomous_campaign_case(\\\"run-falcon\\\")\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"run_julia\", \"arguments\": {\"code\": \"run_autonomous_campaign_case(\\\"run-lotus\\\")\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"run_julia\", \"arguments\": {\"code\": \"run_autonomous_campaign_case(\\\"run-maple\\\")\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"run_julia\", \"arguments\": {\"code\": \"run_autonomous_campaign_case(\\\"run-raven\\\")\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"run_julia\", \"arguments\": {\"code\": \"run_autonomous_campaign_case(\\\"run-sable\\\")\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"file_path\": \"campaign-index.csv\", \"offset\": 0, \"limit\": 1000}}\n</tool_call>\n<tool_call>\n{\"name\": \"grep\", \"arguments\": {\"pattern\": \",73,\", \"path\": \"campaign-index.csv\", \"glob\": \"*\", \"output_mode\": \"content\", \"max_count\": 1}}\n</tool_call>\n<tool_call>\n{\"name\": \"write_t",
+        "tool_calls": null
+      }
+    }
+  ]
+}

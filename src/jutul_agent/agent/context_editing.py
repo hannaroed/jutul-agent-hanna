@@ -1,17 +1,4 @@
-"""Tool-result clearing to bound context growth between compactions.
-
-Long sessions accumulate many medium-sized tool results — source reads, REPL
-output — that no single eviction is large enough to catch and that summarization
-only sweeps up once the window is nearly full. langchain's
-``ContextEditingMiddleware`` clears the *older* tool results to a placeholder
-once the context crosses a threshold, keeping the most recent ones verbatim. It
-is non-mutating (it edits a copy of the request, leaving ``state["messages"]``
-intact) and is wired to run ahead of
-summarization, so most growth is handled by this cheap pass and the LLM summary
-call is reserved for when clearing is not enough. Cleared results stay
-re-derivable: the underlying files are still on disk and REPL commands can be
-re-run.
-"""
+"""Clear older tool results from requests; keep raw results for summaries and history."""
 
 from __future__ import annotations
 
@@ -19,6 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 from langchain.agents.middleware import ContextEditingMiddleware
+from langchain_core.messages import ToolMessage
 from langchain_core.messages.utils import count_tokens_approximately
 
 # Clear old tool results once the context reaches this share of the model's
@@ -35,6 +23,9 @@ _SMALL_WINDOW = 100_000
 # (e.g. an attempt id passed as a later parent_attempt_id). Clearing them frees
 # almost nothing and could break that reference, so leave them intact.
 _NEVER_CLEAR: tuple[str, ...] = ("record_attempt",)
+SMALL_TOOL_RESULT_MAX_CHARS = 2048
+CLEARED_RESULT_PREFIX_LINES = 3
+CLEARED_RESULT_PREFIX_MAX_CHARS = 512
 
 
 def clear_tool_uses_trigger_tokens(window: int | None) -> int:
@@ -66,8 +57,27 @@ class FullRequestContextEditingMiddleware(ContextEditingMiddleware):
             return count_tokens_approximately([*system, *messages], tools=request.tools)
 
         messages = deepcopy(list(request.messages))
+        original_results = {
+            index: message
+            for index, message in enumerate(messages)
+            if isinstance(message, ToolMessage) and isinstance(message.content, str)
+        }
         for edit in self.edits:
             edit.apply(messages, count_tokens=count)
+        for index, original in original_results.items():
+            reduced = messages[index]
+            if not reduced.response_metadata.get("context_editing", {}).get("cleared"):
+                continue
+            if len(original.content) <= SMALL_TOOL_RESULT_MAX_CHARS:
+                messages[index] = original
+            else:
+                prefix = "\n".join(original.content.splitlines()[:CLEARED_RESULT_PREFIX_LINES])
+                messages[index] = reduced.model_copy(
+                    update={
+                        "content": "[cleared; first lines only]\n"
+                        + prefix[:CLEARED_RESULT_PREFIX_MAX_CHARS]
+                    }
+                )
         return request.override(messages=messages)
 
     def wrap_model_call(self, request, handler):
@@ -84,6 +94,10 @@ def _profile_window(model: Any | None) -> int | None:
         return None
     value = profile.get("max_input_tokens")
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def filesystem_tool_result_limit(window: int | None) -> int:
+    return max(256, window // 32) if window and window <= 32_768 else 20_000
 
 
 def build_context_editing_middleware(

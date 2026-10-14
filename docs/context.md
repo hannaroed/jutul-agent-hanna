@@ -46,21 +46,24 @@ A session's context grows with the conversation, so growth is managed in
 layers, cheapest first, each running ahead of the next so the expensive ones
 fire only when the cheaper ones are not enough:
 
-- **Eviction of a large single result.** Any tool result over ~20k tokens is
+- **Eviction of a large single result.** The limit is 512 approximate tokens
+  at a 16k context window, scaled as `window / 32` for windows up to 32k
+  (with a minimum of 256), and 20k tokens for larger windows. A larger result is
   written to `large_tool_results/<id>` under the session state dir and replaced
   inline with a head/tail preview plus a pointer the agent can `read_file`. The
   full result stays recoverable; the context holds a stub. This is deepagents'
   `FilesystemMiddleware`.
 - **Clearing of old tool results.** Once the conversation passes ~60% of the
   model's window, the older tool results (source reads, REPL output) are
-  replaced by a `[cleared]` placeholder while the most recent ones stay
-  verbatim, via langchain's `ContextEditingMiddleware` (wired in
+  reduced to their first three lines, capped at 512 characters, while the most
+  recent ones stay verbatim, via langchain's `ContextEditingMiddleware` (wired in
   `agent/context_editing.py`). It is
   transparent (the raw log is untouched; only the model's per-call view is
   clipped) and cleared results are re-derivable: the files are still on disk and
   REPL commands can be re-run. The clearing decision includes the system prompt
-  and tool schemas. At windows of 32k tokens or less, only the latest eligible
-  tool result stays verbatim. Clearing uses the summarizer's token counter and
+  and tool schemas. Results of at most 2048 characters stay verbatim. At windows
+  of 32k tokens or less, only the latest eligible larger result stays verbatim.
+  Clearing uses the summarizer's token counter and
   reconstructed history, before its budget guard. Memory and planning instructions
   are injected before this guard, so they count towards the budget.
   The estimate uses the current request without scaling it from previous
@@ -80,14 +83,23 @@ fire only when the cheaper ones are not enough:
   prompt injection by our builder, sized from the model profile (which
   `builder._set_profile_window` points at the real loaded window), and
   non-mutating; `TraceRecorder` records each compaction. We lean on the stock
-  middleware so upstream improvements arrive without porting.
+  engine, with guards that reject oversized summary inputs and empty or truncated
+  outputs. Summaries and offloaded history use the original tool results.
+  The latest user request is preserved verbatim and the generated summary is
+  marked as unverified.
 
-The fork can switch between the stock summary prompt and a scientific prompt
-that preserves run IDs, units, exact values, artifact paths and pending actions.
+The fork can switch between a custom generic summary prompt and a scientific
+prompt that preserves run IDs, units, exact values, artifact paths and pending actions.
 `HarnessStrategies` also switches clearing of old tool results independently.
 These switches let evaluations compare settings with the same task and budget;
 they do not guarantee an improvement. Summaries remain lossy, so exact results
 belong in saved artifacts and must be retrieved when reporting them.
+
+The cached-result pilot compares these two prompts within the modified harness.
+It does not compare against the original SINTEF agent. That comparison must use
+a separately pinned upstream revision and report all shared instrumentation.
+Larger outputs, longer task sequences and another model are separate follow-up
+experiments; their results must not be pooled with this pilot.
 
 `/context` shows measured usage by category (the last call's `usage_metadata`
 is exactly what the conversation costs to send) plus both the clearing and the

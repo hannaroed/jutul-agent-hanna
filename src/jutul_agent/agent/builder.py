@@ -28,6 +28,7 @@ from deepagents import (
     register_harness_profile,
 )
 from deepagents.backends import CompositeBackend
+from deepagents.middleware.filesystem import FilesystemMiddleware
 from langchain.agents.middleware import TodoListMiddleware
 
 from jutul_agent.agent.added_dirs import add_dir
@@ -41,6 +42,7 @@ from jutul_agent.agent.capabilities import (
     collect_tools,
     select_for_surface,
 )
+from jutul_agent.agent.context_editing import filesystem_tool_result_limit
 from jutul_agent.agent.memory import (
     build_memory_middleware,
     ensure_memory_dir,
@@ -498,7 +500,7 @@ def build_agent(
         extra_fragments=collect_prompt_fragments(active),
     )
     if harness_strategies is not None:
-        from deepagents.middleware.summarization import DEEPAGENTS_DEFAULT_SUMMARY_PROMPT
+        from jutul_agent.agent.summarization import GENERIC_SUMMARY_PROMPT
 
         session.trace.append(
             "eval_harness_config",
@@ -507,7 +509,7 @@ def build_agent(
                 "system_prompt": system_prompt,
                 "summary_prompt": SCIENTIFIC_SUMMARY_PROMPT
                 if strategies.summarization == "scientific"
-                else DEEPAGENTS_DEFAULT_SUMMARY_PROMPT,
+                else GENERIC_SUMMARY_PROMPT,
                 "model_profile": getattr(resolved_model, "profile", None),
             },
         )
@@ -525,6 +527,12 @@ def build_agent(
         middleware=[
             m
             for m in (
+                FilesystemMiddleware(
+                    backend=backend,
+                    tool_token_limit_before_evict=filesystem_tool_result_limit(
+                        (getattr(resolved_model, "profile", None) or {}).get("max_input_tokens")
+                    ),
+                ),
                 SummarizationSlot() if summarization is not None else None,
                 # Opt-in since deepagents stopped installing it by default. The
                 # planning it gives the model is worth its prompt cost on the

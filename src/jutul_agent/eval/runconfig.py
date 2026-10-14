@@ -85,14 +85,22 @@ def build_runconfig(
     strategies: Any | None = None,
 ) -> dict[str, Any]:
     """The attribution record for one eval run (JSON-serializable)."""
-    from deepagents.middleware.summarization import DEEPAGENTS_DEFAULT_SUMMARY_PROMPT
-
     from jutul_agent import __version__
+    from jutul_agent.agent.context_editing import (
+        CLEARED_RESULT_PREFIX_LINES,
+        CLEARED_RESULT_PREFIX_MAX_CHARS,
+        SMALL_TOOL_RESULT_MAX_CHARS,
+        filesystem_tool_result_limit,
+    )
     from jutul_agent.agent.prompts import assemble_session_prompt
+    from jutul_agent.agent.recovery import MODEL_OUTPUT_POLICY
     from jutul_agent.agent.strategies import HarnessStrategies
     from jutul_agent.agent.summarization import (
+        GENERIC_SUMMARY_PROMPT,
         MESSAGE_HISTORY_SANITIZATION_POLICY,
         SCIENTIFIC_SUMMARY_PROMPT,
+        SMALL_WINDOW_TOKEN_MARGIN,
+        SUMMARY_POLICY,
         SUMMARY_SANITIZATION_POLICY,
     )
     from jutul_agent.agent.tool_scheduling import TOOL_SCHEDULING_POLICY
@@ -101,7 +109,7 @@ def build_runconfig(
     summary_prompt = (
         SCIENTIFIC_SUMMARY_PROMPT
         if strategies.summarization == "scientific"
-        else DEEPAGENTS_DEFAULT_SUMMARY_PROMPT
+        else GENERIC_SUMMARY_PROMPT
     )
     manifest = (julia_project / "Manifest.toml") if julia_project else None
     return {
@@ -122,8 +130,17 @@ def build_runconfig(
         "skills_sha256": _skill_hashes(adapter),
         "simulator": adapter.name,
         "context_window": context_window,
-        "context_policy": "unscaled-full-request-budget-latest-pair-at-32k-v5",
+        "context_policy": "unscaled-full-request-budget-with-small-window-margin-v7",
+        "small_window_token_margin": SMALL_WINDOW_TOKEN_MARGIN,
+        "summary_policy": SUMMARY_POLICY,
+        "tool_result_retention": {
+            "filesystem_token_limit": filesystem_tool_result_limit(context_window),
+            "small_result_max_chars": SMALL_TOOL_RESULT_MAX_CHARS,
+            "cleared_prefix_lines": CLEARED_RESULT_PREFIX_LINES,
+            "cleared_prefix_max_chars": CLEARED_RESULT_PREFIX_MAX_CHARS,
+        },
         "path_policy": "agent-visible-to-real-path-resolution-v1",
+        "model_output_policy": MODEL_OUTPUT_POLICY,
         "tool_scheduling": TOOL_SCHEDULING_POLICY
         if strategies.sequential_tools
         else "provider-default",

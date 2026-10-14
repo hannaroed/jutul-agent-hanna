@@ -4,6 +4,7 @@ import json
 import sqlite3
 import subprocess
 import tarfile
+from pathlib import Path
 
 import pytest
 
@@ -119,3 +120,43 @@ def test_archive_refuses_to_copy_into_its_own_source(tmp_path, relative):
     with pytest.raises(ValueError, match="outside the source tree"):
         archive_tree(source, source / relative)
     assert list(source.iterdir()) == [source / "result.csv"]
+
+
+async def test_solver_archives_partial_work_when_model_output_is_truncated(tmp_path, monkeypatch):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    from inspect_ai.model import GenerateConfig
+    from inspect_ai.solver import TaskState
+
+    from jutul_agent.agent.recovery import ModelOutputError
+    from jutul_agent.eval import solver
+    from jutul_agent.paths import state_home
+
+    @asynccontextmanager
+    async def offline_bridge(state):
+        yield
+
+    async def failed_session(**kwargs):
+        workspace = kwargs["scratch"] / "workspace"
+        workspace.mkdir()
+        (workspace / "completed.csv").write_text("run_id,value\nrun-1,42\n")
+        trace_path = tmp_path / "session/trace.sqlite"
+        with TraceLog(trace_path) as trace:
+            trace.append("message_assistant", {"content": '<tool_call>{"name": "run_julia"'})
+        kwargs["store"].set(solver.STORE_TRACE_DB, str(trace_path))
+        raise ModelOutputError("Model response was truncated at the output token limit.")
+
+    monkeypatch.setattr(solver, "agent_bridge", offline_bridge)
+    monkeypatch.setattr(
+        solver, "get_model", lambda: SimpleNamespace(name="offline", config=GenerateConfig())
+    )
+    monkeypatch.setattr(solver, "_run_jutul_session", failed_session)
+    state = TaskState(model="offline", sample_id="cut", epoch=1, input="go", messages=[])
+    with pytest.raises(ModelOutputError, match="truncated"):
+        await solver.jutul_agent_solver()(state, None)
+    archive = Path(state.store.get(solver.STORE_ARCHIVE))
+    assert archive.is_relative_to(state_home())
+    assert (archive / "workspace/completed.csv").read_text() == "run_id,value\nrun-1,42\n"
+    assert json.loads((archive / "execution.json").read_text()) == {"outcome": "error"}
+    assert "session/trace.sqlite" in json.loads((archive / "manifest.json").read_text())

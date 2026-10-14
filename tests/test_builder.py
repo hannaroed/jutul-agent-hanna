@@ -8,6 +8,56 @@ from jutul_agent.agent.builder import _set_profile_window, register_provider_pro
 from jutul_agent.models import DEFAULT_MODEL, MODEL_ENV_VAR, resolve_model
 
 
+@pytest.mark.parametrize("window", [16384, 131072])
+async def test_large_csv_read_is_bounded_and_cell_remains_retrievable(
+    workspace, tmp_path, monkeypatch, window
+):
+    from langchain_core.messages import HumanMessage, ToolMessage
+
+    from jutul_agent.agent import builder
+    from jutul_agent.lab.fakes import (
+        FakeJulia,
+        make_fake_adapter,
+        make_scripted_model,
+        scripted_final,
+        scripted_tool_call,
+    )
+    from jutul_agent.session import Session
+
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(builder, "build_scientific_summarization_middleware", lambda *a, **k: None)
+    header = "run_id,cell_id,pressure_bar,water_saturation"
+    rows = [f"case-01,{cell},210.27892522418756,0.8529383760035563" for cell in range(1, 193)]
+    original = header + "\n" + "\n".join(rows) + "\n"
+    path = workspace / "results.csv"
+    path.write_text(original)
+    model = make_scripted_model(
+        [
+            scripted_tool_call(tool_name="read_file", args={"file_path": str(path), "limit": 100}),
+            scripted_tool_call(
+                tool_name="grep",
+                args={"path": str(path), "pattern": ",73,", "output_mode": "content"},
+            ),
+            scripted_final("done"),
+        ]
+    )
+    model.profile = {"max_input_tokens": window}
+    session = Session.create(
+        julia=FakeJulia(), state_root=tmp_path, simulator=make_fake_adapter(tmp_path)
+    )
+    agent, _ = builder.build_agent(session, model=model, approval_mode="auto")
+    result = await agent.ainvoke(
+        {"messages": [HumanMessage(content="Read the CSV and retrieve cell 73.")]}
+    )
+    read, grep = [message for message in result["messages"] if isinstance(message, ToolMessage)]
+    assert header in read.content
+    assert ("truncated" in read.content.lower()) == (window == 16384)
+    if window == 16384:
+        assert len(read.content) <= 2048
+    assert rows[72] in grep.content
+    assert path.read_text() == original
+
+
 @pytest.fixture(autouse=True)
 def _provider_capabilities(monkeypatch: pytest.MonkeyPatch) -> None:
     """Supply capabilities explicitly while constructing real provider models."""

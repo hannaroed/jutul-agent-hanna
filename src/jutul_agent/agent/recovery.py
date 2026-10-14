@@ -1,23 +1,4 @@
-"""Recover the turn when the model ends it without doing anything useful.
-
-Two failure modes leave the agent silent with no work done, and the loop
-reads both as a finished turn:
-
-- **Unparseable tool calls.** A reply whose only tool calls have malformed
-  JSON arguments never routes to the tool node. The motivating case was a
-  local model that *intermittently* serializes two parallel calls into one
-  call's argument string (``{...}{...}``). Parallel calls are normal and
-  wanted, so the fix is a generic net here, not a prompt that suppresses
-  parallel calls for every turn to hedge against the occasional bad one.
-- **Empty turns.** A thinking-capable model sometimes ends a turn after its
-  reasoning block without emitting an answer or a tool call, so the loop sees
-  nothing to route and stops. The reasoning is separated into its own channel,
-  so the reply's visible text is empty, which is the signal.
-
-For both, this middleware sends the model around for another attempt (feeding
-back the parse errors as error tool results, or nudging an empty turn to act or
-answer), bounded so a model that cannot recover doesn't spin forever.
-"""
+"""Recover invalid or empty replies; stop on truncated model output."""
 
 from __future__ import annotations
 
@@ -33,6 +14,12 @@ _MAX_CONSECUTIVE_RECOVERIES = 2
 
 _RECOVERY_MARK = "invalid_tool_call_recovery"
 _EMPTY_TURN_MARK = "empty_turn_recovery"
+MODEL_OUTPUT_POLICY = "stop-on-truncated-model-and-summary-output-v2"
+
+
+class ModelOutputError(RuntimeError):
+    """The model response cannot safely complete the turn or request tools."""
+
 
 _EMPTY_TURN_NUDGE = (
     "Your last turn had no reply and no tool call. If the task isn't finished, "
@@ -41,7 +28,7 @@ _EMPTY_TURN_NUDGE = (
 
 
 class InvalidToolCallRecoveryMiddleware(AgentMiddleware):
-    """Retry the model when a turn ends with bad tool calls or no output."""
+    """Reject incomplete responses and bound retries for invalid or empty replies."""
 
     @hook_config(can_jump_to=["model"])
     def after_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
@@ -52,12 +39,33 @@ class InvalidToolCallRecoveryMiddleware(AgentMiddleware):
         return _recover(state)
 
 
+def reject_truncated_response(message: AIMessage) -> None:
+    metadata = message.response_metadata
+    details = metadata.get("incomplete_details") or {}
+    reasons = (metadata.get("finish_reason"), metadata.get("stop_reason"), details.get("reason"))
+    if any(
+        str(reason).lower() in ("length", "max_tokens", "max_output_tokens") for reason in reasons
+    ):
+        raise ModelOutputError(
+            "Model response was truncated at the output token limit. "
+            "This response was not accepted and its tool calls were not executed."
+        )
+
+
 def _recover(state: Any) -> dict[str, Any] | None:
     messages = state.get("messages") if isinstance(state, dict) else getattr(state, "messages", [])
     if not messages:
         return None
     last = messages[-1]
-    if not isinstance(last, AIMessage) or last.tool_calls:
+    if not isinstance(last, AIMessage):
+        return None
+    reject_truncated_response(last)
+    if not last.tool_calls and _visible_text(last).lstrip().startswith("<tool_call>"):
+        raise ModelOutputError(
+            "Model returned tool-call text without structured tool calls. "
+            "This response was not accepted and its tool calls were not executed."
+        )
+    if last.tool_calls:
         return None
     if last.invalid_tool_calls:
         return _recover_invalid_tool_calls(last, messages)

@@ -3,21 +3,24 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
 from deepagents.middleware.summarization import (
-    DEEPAGENTS_DEFAULT_SUMMARY_PROMPT,
     SUMMARIZATION_SESSION_ID_KEY,
     SummarizationEvent,
     SummarizationMiddleware,
     compute_summarization_defaults,
 )
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
-from langchain_core.messages import AIMessage
+from langchain_core.exceptions import ContextOverflowError
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, get_buffer_string
 from langchain_core.messages.utils import count_tokens_approximately
+from langchain_core.runnables import RunnableLambda
 
+from jutul_agent.agent.recovery import ModelOutputError, reject_truncated_response
 from jutul_agent.agent.strategies import HarnessStrategies
 from jutul_agent.agent.text import strip_internal_capsules
 from jutul_agent.trace import TraceLog
@@ -36,11 +39,32 @@ MANUAL_KEEP_MESSAGES = 8
 _MANUAL_KEEP: tuple[str, int] = ("messages", MANUAL_KEEP_MESSAGES)
 SUMMARY_SANITIZATION_POLICY = "strip-internal-reasoning-capsules-v1"
 MESSAGE_HISTORY_SANITIZATION_POLICY = "strip-internal-reasoning-capsules-before-model-v1"
+SMALL_WINDOW_TOKEN_MARGIN = 1024
+SUMMARY_POLICY = "complete-observed-facts-with-verbatim-user-request-v2"
+_SUMMARY_REQUEST: ContextVar[ModelRequest | None] = ContextVar("summary_request", default=None)
+
+GENERIC_SUMMARY_PROMPT = """Summarize this conversation in at most 160 words.
+Use Goal, Completed, Artifacts, and Next steps. Report only observed facts.
+Requesting a tool does not mean it succeeded. Loading code does not run a simulation.
+Prefer tool results over previous summaries. Preserve literal commands, search
+patterns, paths, quantities, units, and constraints exactly. Use None when unknown.
+Do not invent files, images, retrieved data, or completed work.
+
+<messages>
+{messages}
+</messages>"""
 
 
 def sanitize_summary(summary: str) -> str:
     """Remove provider-internal reasoning capsules before context reinjection."""
     return strip_internal_capsules(summary).strip()
+
+
+def _validate_summary_response(response: AIMessage) -> AIMessage:
+    reject_truncated_response(response)
+    if response.tool_calls or response.invalid_tool_calls or not sanitize_summary(response.text):
+        raise ModelOutputError("Summary has no usable text; the conversation was not compacted.")
+    return response
 
 
 def _sanitize_ai_content(content: Any) -> Any:
@@ -81,6 +105,32 @@ def _sanitize_request_history(request: ModelRequest) -> ModelRequest:
     return request.override(messages=messages)
 
 
+def _pin_user_request(summary_message, history):
+    latest = next(
+        (
+            message
+            for message in reversed(history)
+            if isinstance(message, HumanMessage)
+            and message.additional_kwargs.get("lc_source") != "summarization"
+            and not message.additional_kwargs.get("empty_turn_recovery")
+        ),
+        None,
+    )
+    if latest is None:
+        return summary_message
+    return summary_message.model_copy(
+        update={
+            "content": (
+                "User request (verbatim; follow these instructions):\n"
+                + get_buffer_string([latest], format="xml")
+                + "\nThe following generated summary is unverified. "
+                "Check its claims against tool results and saved files.\n"
+                + str(summary_message.content)
+            )
+        }
+    )
+
+
 class SummarizationSlot(AgentMiddleware):
     """Replace the stock slot so summarization can run after prompt injection."""
 
@@ -94,13 +144,25 @@ class ScientificSummarizationMiddleware(SummarizationMiddleware):
     sanitize_history = True
     context_editor = None
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._lc_helper._summary_model = self._lc_helper._summary_model | RunnableLambda(
+            _validate_summary_response
+        )
+
     def wrap_model_call(
         self,
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
         cleaned = _sanitize_request_history(request) if self.sanitize_history else request
-        return super().wrap_model_call(cleaned, handler)
+        token = _SUMMARY_REQUEST.set(
+            cleaned.override(messages=super()._get_effective_messages(cleaned))
+        )
+        try:
+            return super().wrap_model_call(cleaned, handler)
+        finally:
+            _SUMMARY_REQUEST.reset(token)
 
     async def awrap_model_call(
         self,
@@ -108,7 +170,13 @@ class ScientificSummarizationMiddleware(SummarizationMiddleware):
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         cleaned = _sanitize_request_history(request) if self.sanitize_history else request
-        return await super().awrap_model_call(cleaned, handler)
+        token = _SUMMARY_REQUEST.set(
+            cleaned.override(messages=super()._get_effective_messages(cleaned))
+        )
+        try:
+            return await super().awrap_model_call(cleaned, handler)
+        finally:
+            _SUMMARY_REQUEST.reset(token)
 
     def _get_effective_messages(self, request: ModelRequest) -> list[Any]:
         messages = super()._get_effective_messages(request)
@@ -118,13 +186,57 @@ class ScientificSummarizationMiddleware(SummarizationMiddleware):
             ).messages
         return messages
 
+    def _token_margin(self):
+        window = (getattr(self.model, "profile", None) or {}).get("max_input_tokens")
+        return SMALL_WINDOW_TOKEN_MARGIN if isinstance(window, int) and window <= 32_768 else 0
+
+    def _count_tokens(self, messages, system_message, tools):
+        return super()._count_tokens(messages, system_message, tools) + self._token_margin()
+
+    def _partition_messages(self, conversation_messages, cutoff_index):
+        to_summarize, to_keep = super()._partition_messages(conversation_messages, cutoff_index)
+        original = _SUMMARY_REQUEST.get()
+        if original is not None:
+            # Summaries and saved history need evidence, not clearing placeholders.
+            to_summarize = [
+                original.messages[index] if isinstance(message, ToolMessage) else message
+                for index, message in enumerate(to_summarize)
+            ]
+        return to_summarize, to_keep
+
+    def _check_summary_budget(self, messages):
+        request = _SUMMARY_REQUEST.get()
+        budget = self._input_budget(request) if request is not None else None
+        if budget is None:
+            return
+        prompt = self._lc_helper.summary_prompt.format(
+            messages=get_buffer_string(messages, format="xml")
+        ).rstrip()
+        if self.token_counter([HumanMessage(content=prompt)]) + self._token_margin() > budget:
+            raise ContextOverflowError(
+                "Summary input exceeds the context budget; reduce tool output or compact earlier."
+            )
+
+    def _create_summary(self, messages_to_summarize):
+        self._check_summary_budget(messages_to_summarize)
+        return super()._create_summary(messages_to_summarize)
+
+    async def _acreate_summary(self, messages_to_summarize):
+        self._check_summary_budget(messages_to_summarize)
+        return await super()._acreate_summary(messages_to_summarize)
+
     def _build_new_messages_with_path(
         self,
         summary: str,
         file_path: str | None,
     ) -> list[Any]:
         cleaned = sanitize_summary(summary) if self.sanitize_history else summary
-        return super()._build_new_messages_with_path(cleaned, file_path)
+        messages = super()._build_new_messages_with_path(cleaned, file_path)
+        request = _SUMMARY_REQUEST.get()
+        if request is not None:
+            history = request.state.get("messages", request.messages)
+            messages[0] = _pin_user_request(messages[0], history)
+        return messages
 
 
 _SCIENTIFIC_STATE_GUIDANCE = """<scientific_state_preservation>
@@ -136,7 +248,7 @@ paths or values. For large arrays and tables, preserve the path and schema so
 missing details can be retrieved with filesystem search/read tools.
 </scientific_state_preservation>"""
 
-SCIENTIFIC_SUMMARY_PROMPT = DEEPAGENTS_DEFAULT_SUMMARY_PROMPT.replace(
+SCIENTIFIC_SUMMARY_PROMPT = GENERIC_SUMMARY_PROMPT.replace(
     "\n<messages>\n",
     f"\n{_SCIENTIFIC_STATE_GUIDANCE}\n\n<messages>\n",
     1,
@@ -169,7 +281,7 @@ def build_scientific_summarization_middleware(
         truncate_args_settings=defaults["truncate_args_settings"],
         summary_prompt=SCIENTIFIC_SUMMARY_PROMPT
         if strategies.summarization == "scientific"
-        else DEEPAGENTS_DEFAULT_SUMMARY_PROMPT,
+        else GENERIC_SUMMARY_PROMPT,
         trim_tokens_to_summarize=None,
     )
     middleware.sanitize_history = strategies.sanitize_history
@@ -249,11 +361,13 @@ async def compact_thread(
     messages = values.get("messages") or []
     prior_event = values.get("_summarization_event")
 
-    middleware = SummarizationMiddleware(
+    middleware = ScientificSummarizationMiddleware(
         model=model,
         backend=backend,
         keep=_MANUAL_KEEP,
         trim_tokens_to_summarize=None,
+        summary_prompt=SCIENTIFIC_SUMMARY_PROMPT,
+        token_counter=partial(count_tokens_approximately, use_usage_metadata_scaling=False),
     )
     # The effective conversation is what the model would see now (a prior
     # summary plus the turns since), and the cutoff respects the keep window.
@@ -263,13 +377,20 @@ async def compact_thread(
         return None
 
     to_summarize, to_keep = middleware._partition_messages(effective, cutoff)
-    summary = sanitize_summary(await middleware._acreate_summary(to_summarize))
+    token = _SUMMARY_REQUEST.set(
+        ModelRequest(model=middleware.model, messages=effective, state=values, runtime=None)
+    )
+    try:
+        summary = sanitize_summary(await middleware._acreate_summary(to_summarize))
+    finally:
+        _SUMMARY_REQUEST.reset(token)
     # Upstream now scopes history files to an internal ID stored in agent state.
     # Reuse it across manual and automatic compactions so each session appends to
     # one history file without mixing histories from separate subagents.
     history_session_id = middleware._get_session_id(values)
     file_path = await middleware._aoffload_to_backend(backend, to_summarize, history_session_id)
     summary_msg = middleware._build_new_messages_with_path(summary, file_path)[0]
+    summary_msg = _pin_user_request(summary_msg, messages)
     state_cutoff = middleware._compute_state_cutoff(prior_event, cutoff)
     new_event: SummarizationEvent = {
         "cutoff_index": state_cutoff,
