@@ -37,7 +37,15 @@ def trial_record(log, key: tuple[int, int, int], plan: dict) -> dict:
         "server configuration": metadata.get("server_configuration")
         == plan.get("server_configuration"),
     }
-    for name in ("julia_environment_sha256", "deps", "runtime", "context_policy"):
+    for name in (
+        "julia_environment_sha256",
+        "deps",
+        "runtime",
+        "context_policy",
+        "model_output_policy",
+        "small_window_token_margin",
+        "summary_policy",
+    ):
         if name in plan:
             checks[name] = config.get(name) == plan[name]
     for name, expected in {**plan["generation"], "seed": 1000 + trial}.items():
@@ -50,6 +58,13 @@ def trial_record(log, key: tuple[int, int, int], plan: dict) -> dict:
     runtime_errors = (getattr(integrity, "metadata", None) or {}).get("runtime_errors", [])
     limit = getattr(sample, "limit", None)
     usage = sample.model_usage or {}
+    model_output_errors = [
+        f"model response stopped with {choice.stop_reason}"
+        for event in getattr(sample, "events", ())
+        if event.event == "model" and event.output is not None
+        for choice in event.output.choices
+        if choice.stop_reason in ("max_tokens", "model_length")
+    ]
     return {
         "trial": trial,
         "campaign": plan["campaigns"][campaign]["name"],
@@ -59,10 +74,12 @@ def trial_record(log, key: tuple[int, int, int], plan: dict) -> dict:
         "error": sample.error.message if sample.error else None,
         "limit": str(limit.type) if limit else None,
         "runtime_errors": runtime_errors,
+        "model_output_errors": model_output_errors,
         "success": not mismatches
         and sample.error is None
         and limit is None
         and not runtime_errors
+        and not model_output_errors
         and all(value == "C" for value in scores.values()),
         **scores,
         "compactions": numeric_score(sample, "context_compaction_count"),
@@ -95,6 +112,7 @@ def summarize(records: list[dict], plan: dict) -> list[dict]:
                 "sample_errors": sum(row["error"] is not None for row in runs),
                 "limits": sum(row["limit"] is not None for row in runs),
                 "runtime_failures": sum(bool(row.get("runtime_errors")) for row in runs),
+                "model_output_failures": sum(bool(row.get("model_output_errors")) for row in runs),
                 "configuration_mismatches": sum(
                     bool(row["configuration_mismatches"]) for row in runs
                 ),

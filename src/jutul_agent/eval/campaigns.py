@@ -126,6 +126,10 @@ async def calibrate(
                 "artifact_sha256": {
                     case: sha256(directory / "results" / f"{case}.csv") for case in CAMPAIGN_CASES
                 },
+                "diagnostic_sha256": {
+                    path.name: sha256(path)
+                    for path in sorted((directory / "diagnostics").glob("*.csv"))
+                },
             },
         )
         load_reference(campaign, directory, julia_project)
@@ -165,6 +169,10 @@ def load_reference(campaign: Campaign, directory: Path, julia_project: Path) -> 
             or float(rows[0]["injection_rate_m3_day"]) != rate
         ):
             raise ValueError("reference artifact parameters disagree with the campaign")
+    for name, digest in saved.get("diagnostic_sha256", {}).items():
+        path = directory / "diagnostics" / name
+        if not path.is_file() or sha256(path) != digest:
+            raise ValueError("reference diagnostic integrity failure")
     if saved["answer"] != reference_answer(campaign, directory):
         raise ValueError("reference answer disagrees with artifacts")
     return saved

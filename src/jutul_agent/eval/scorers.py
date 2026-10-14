@@ -265,9 +265,6 @@ def campaign_integrity() -> Scorer:
         runtime_errors = []
         cases = contract["cases"]
         problems.extend(case_coverage_problems(events, function, dict.fromkeys(cases, 1)))
-        for argument, pair in calls:
-            if argument in cases and not result_succeeded(pair.result):
-                runtime_errors.append(f"supplied campaign function failed for {argument}")
         completed = [(argument, pair) for argument, pair in calls if result_succeeded(pair.result)]
         if len(completed) != len(cases):
             problems.append("not all required simulations succeeded")
@@ -350,6 +347,18 @@ def campaign_integrity() -> Scorer:
                 runtime_errors.append("supplied campaign fixture failed to load")
         elif calls and includes[0].end >= calls[0][1].start:
             problems.append("campaign started before setup completed")
+        setup_end = next((pair.end for pair in includes if result_succeeded(pair.result)), None)
+        recorded = set()
+        for argument, pair in calls:
+            if result_succeeded(pair.result):
+                recorded.add(argument)
+            elif (
+                argument in cases
+                and argument not in recorded
+                and setup_end is not None
+                and pair.start > setup_end
+            ):
+                runtime_errors.append(f"supplied campaign function failed for {argument}")
         if any(left.end > right.start for left, right in pairwise(pairs)):
             problems.append("overlapping tool calls")
         fixture = (state.metadata.get("fixtures") or {}).get("campaign.jl")

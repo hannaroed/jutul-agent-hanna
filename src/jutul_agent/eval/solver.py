@@ -201,6 +201,8 @@ async def _run_jutul_session(
     scratch: Path,
     store: Any,
     ground_truth: str | None = None,
+    follow_up_prompts: list[str] | None = None,
+    follow_up_fixtures: list[dict[str, str]] | None = None,
 ) -> str:
     from jutul_agent.paths import set_workspace_root
     from jutul_agent.simulators import registry
@@ -307,7 +309,9 @@ async def _run_jutul_session(
         # ground truth, the sharpest signal an eval run offers.
         if ground_truth:
             host.session.trace.append(EVAL_TARGET, {"expected": ground_truth})
-        result = await host.runner.run_prompt(prompt)
+        result = await _run_prompts(
+            host, workspace, prompt, follow_up_prompts or [], follow_up_fixtures or []
+        )
     finally:
         try:
             memory = host.session._ephemeral_memory_dir
@@ -319,6 +323,32 @@ async def _run_jutul_session(
     if result.interrupts:
         return "[eval-error] the turn paused for tool approval in auto mode"
     return _final_text(result.messages)
+
+
+async def _run_prompts(host, workspace, prompt, follow_ups, updates):
+    if not isinstance(follow_ups, list) or any(not isinstance(text, str) for text in follow_ups):
+        raise TypeError("follow_up_prompts must be a list of strings")
+    if updates and len(updates) != len(follow_ups):
+        raise ValueError("follow_up_fixtures must match follow_up_prompts")
+    if not isinstance(updates, list) or any(not isinstance(item, dict) for item in updates):
+        raise TypeError("follow_up_fixtures must be a list of dictionaries")
+    changes = updates or [{} for _ in follow_ups]
+    for fixtures in changes:
+        for name, content in fixtures.items():
+            (workspace / name).resolve().relative_to(workspace.resolve())
+            if not isinstance(content, str):
+                raise TypeError("follow-up fixture content must be text")
+    result = await host.runner.run_prompt(prompt)
+    for text, fixtures in zip(follow_ups, changes, strict=True):
+        if result.interrupts:
+            break
+        for name, content in fixtures.items():
+            path = (workspace / name).resolve()
+            path.relative_to(workspace.resolve())
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        result = await host.runner.run_prompt(text)
+    return result
 
 
 @solver
@@ -386,6 +416,8 @@ def jutul_agent_solver(simulator: str = "jutuldarcy") -> Solver:
                         scratch=scratch,
                         store=state.store,
                         ground_truth=state.metadata.get("expected"),
+                        follow_up_prompts=state.metadata.get("follow_up_prompts"),
+                        follow_up_fixtures=state.metadata.get("follow_up_fixtures"),
                     )
                 finally:
                     set_workspace_root(previous_workspace)

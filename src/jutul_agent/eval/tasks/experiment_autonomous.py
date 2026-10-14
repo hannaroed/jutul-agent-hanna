@@ -31,8 +31,12 @@ def autonomous_sample(
         id="experiment-autonomous-jutuldarcy",
         input=(
             "Run the six supplied JutulDarcy simulations without follow-up messages. "
-            f"Required cases: {cases}. Include `campaign.jl` once. "
-            "Run one case per `run_julia` call with `run_autonomous_campaign_case`, "
+            f"Required cases: {cases}.\n"
+            'First Julia call: use `run_julia` with exactly `include("campaign.jl")`. '
+            "Wait for it to succeed. This loads the supplied Julia function "
+            "`run_autonomous_campaign_case` into the persistent REPL; it is not a separate tool.\n"
+            "Run one case per `run_julia` call, starting with the Julia code "
+            '`run_autonomous_campaign_case("run-cedar")`, '
             "waiting for the result before continuing. Do not repeat successful cases.\n"
             "After all six cases have finished:\n"
             "1. Use `read_file` on `campaign-index.csv`. Choose the highest recovery "

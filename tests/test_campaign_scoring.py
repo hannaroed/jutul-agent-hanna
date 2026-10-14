@@ -404,3 +404,34 @@ async def test_valid_campaign_call_failure_is_distinct_from_an_incorrect_answer(
         (tmp_path / "results/run-falcon.csv").unlink()
     score = await campaign_integrity()(sample, Target('{"run_id":"run-falcon"}'))
     assert score.value == "I" and score.metadata["runtime_errors"]
+
+
+@pytest.mark.parametrize("misuse", ["before-setup", "repeat-completed"])
+async def test_invalid_campaign_attempts_are_model_errors(tmp_path, misuse):
+    from jutul_agent.eval.scorers import campaign_integrity
+
+    sample = campaign_state(tmp_path)
+    events = _trace_events(sample)
+    invalid = exchange(
+        "run_julia",
+        {"code": 'run_case("run-falcon")'},
+        "ERROR: function not defined"
+        if misuse == "before-setup"
+        else "ERROR: completed case already recorded",
+        identifier="invalid",
+    )
+    extra = state(tmp_path / "invalid-trace", invalid)
+    extra_events = _trace_events(extra)
+    events = (
+        extra_events + events
+        if misuse == "before-setup"
+        else events[:4] + extra_events + events[4:]
+    )
+    database = tmp_path / "combined.sqlite"
+    with TraceLog(database) as trace:
+        for event in events:
+            trace.append(event.kind, event.payload)
+    sample.store.set("jutul/trace_db", str(database))
+    score = await campaign_integrity()(sample, Target('{"run_id":"run-falcon"}'))
+    assert score.value == "I"
+    assert score.metadata["runtime_errors"] == []

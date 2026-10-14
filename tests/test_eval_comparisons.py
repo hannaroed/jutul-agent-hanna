@@ -206,6 +206,39 @@ def test_campaign_check_survives_log_serialization_but_rejects_parameter_changes
         assert not record["success"]
 
 
+@pytest.mark.parametrize("reason", ["max_tokens", "model_length"])
+def test_report_marks_truncated_responses_as_failures_even_with_correct_scores(reason):
+    log, plan = report_fixture()
+    log.samples[0].events = [
+        SimpleNamespace(
+            event="model", output=SimpleNamespace(choices=[SimpleNamespace(stop_reason=reason)])
+        )
+    ]
+    record = trial_record(log, (1, 0, 0), plan)
+    assert record["model_output_errors"] == [f"model response stopped with {reason}"]
+    assert not record["success"]
+    assert summarize([record], plan)[0]["model_output_failures"] == 1
+
+
+def test_complete_model_responses_do_not_block_reports():
+    log, plan = report_fixture()
+    log.samples[0].events = [
+        SimpleNamespace(event="tool"),
+        SimpleNamespace(event="model", output=None),
+        SimpleNamespace(
+            event="model",
+            output=SimpleNamespace(
+                choices=[
+                    SimpleNamespace(stop_reason="tool_calls"),
+                    SimpleNamespace(stop_reason="stop"),
+                ]
+            ),
+        ),
+    ]
+    record = trial_record(log, (1, 0, 0), plan)
+    assert record["model_output_errors"] == [] and record["success"]
+
+
 @pytest.mark.parametrize(
     "failure",
     [
@@ -259,6 +292,16 @@ def matrix_fixture():
     }
 
 
+@pytest.mark.parametrize("output_tokens", [0, -1, 15564, 16384])
+async def test_impossible_output_budget_stops_before_runtime_setup(tmp_path, output_tokens):
+    from jutul_agent.eval.comparisons import run
+
+    args = SimpleNamespace(output=tmp_path, julia_project=tmp_path, max_tokens=output_tokens)
+    with pytest.raises(ValueError, match="leave room for model input"):
+        await run(args)
+    assert not (tmp_path / "plan.json").exists()
+
+
 def completed_records(plan):
     return [
         {
@@ -292,7 +335,9 @@ def test_batch_is_explicit_and_keeps_valid_incorrect_answers_in_the_study():
 
 
 @pytest.mark.parametrize("batch", [False, True])
-@pytest.mark.parametrize("failure", ["error", "limit", "configuration", "missing-score", "runtime"])
+@pytest.mark.parametrize(
+    "failure", ["error", "limit", "configuration", "missing-score", "runtime", "model-output"]
+)
 def test_technical_failure_blocks_both_default_and_batch_resume(batch, failure):
     plan = matrix_fixture()
     records = completed_records(plan)
@@ -302,6 +347,8 @@ def test_technical_failure_blocks_both_default_and_batch_resume(batch, failure):
         records[-1]["campaign_integrity"] = None
     elif failure == "runtime":
         records[-1]["runtime_errors"] = ["Julia helper failed"]
+    elif failure == "model-output":
+        records[-1]["model_output_errors"] = ["model response stopped with max_tokens"]
     else:
         records[-1][failure] = "failure"
     with pytest.raises(ValueError, match="previous trial had a technical failure"):
@@ -309,7 +356,8 @@ def test_technical_failure_blocks_both_default_and_batch_resume(batch, failure):
 
 
 @pytest.mark.parametrize(
-    "failure", ["technical", "runtime", "incorrect-answer", "exception", "unrecorded-runtime"]
+    "failure",
+    ["technical", "runtime", "model-output", "incorrect-answer", "exception", "unrecorded-runtime"],
 )
 async def test_runner_preserves_attempt_and_stops_before_more_compute(
     tmp_path, monkeypatch, failure
@@ -319,7 +367,7 @@ async def test_runner_preserves_attempt_and_stops_before_more_compute(
 
     from jutul_agent.eval import comparisons
 
-    technical_error = failure in ("technical", "runtime")
+    technical_error = failure in ("technical", "runtime", "model-output")
 
     project = tmp_path / "environment"
     project.mkdir()
@@ -335,6 +383,7 @@ async def test_runner_preserves_attempt_and_stops_before_more_compute(
         model="offline",
         endpoint="http://offline/v1",
         trials=3,
+        max_tokens=4096,
         batch=True,
         log_model_api=True,
     )
@@ -360,6 +409,7 @@ async def test_runner_preserves_attempt_and_stops_before_more_compute(
         "success": False,
         "error": "context overflow" if failure == "technical" else None,
         "runtime_errors": ["Julia helper failed"] if failure == "runtime" else [],
+        "model_output_errors": ["max_tokens"] if failure == "model-output" else [],
         "limit": None,
         "configuration_mismatches": [],
         **{name: "I" for name in REQUIRED_SCORES},
@@ -369,6 +419,7 @@ async def test_runner_preserves_attempt_and_stops_before_more_compute(
 
     async def evaluate(*_, **__):
         assert __["log_model_api"] is True
+        assert __["max_tokens"] == 4096
         calls.append(1)
         assert (root / "active-trial.json").exists()
         if failure == "exception":

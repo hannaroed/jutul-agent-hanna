@@ -123,6 +123,7 @@ def technical_failure(record: dict) -> bool:
     return bool(
         record["error"]
         or record.get("runtime_errors")
+        or record.get("model_output_errors")
         or record["limit"]
         or record["configuration_mismatches"]
         or any(record[name] is None for name in REQUIRED_SCORES)
@@ -150,6 +151,9 @@ async def run(args) -> None:
     active = root / "active-trial.json"
     if active.exists():
         raise ValueError("an unfinished trial exists; inspect its logs before resuming")
+    output_tokens = getattr(args, "max_tokens", 2048)
+    if not 0 < output_tokens < int(CONTEXT_WINDOW * 0.95):
+        raise ValueError("max_tokens must be positive and leave room for model input")
     import os
 
     for key in (
@@ -197,11 +201,14 @@ async def run(args) -> None:
         "deps": runtime["deps"],
         "runtime": runtime["runtime"],
         "context_policy": runtime["context_policy"],
+        "model_output_policy": runtime["model_output_policy"],
+        "small_window_token_margin": runtime["small_window_token_margin"],
+        "summary_policy": runtime["summary_policy"],
         "compute_threads": 1,
         "generation": {
             "temperature": 0.6,
             "top_p": 0.95,
-            "max_tokens": 2048,
+            "max_tokens": output_tokens,
             "max_retries": 2,
             "timeout": 180,
             "attempt_timeout": 120,
@@ -290,6 +297,7 @@ def main() -> None:
     parser.add_argument("--model", default="openai-api/vllm/Qwen/Qwen3-8B")
     parser.add_argument("--endpoint", default="http://127.0.0.1:8000/v1")
     parser.add_argument("--trials", type=int, default=3)
+    parser.add_argument("--max-tokens", type=int, default=2048, help="output tokens per response")
     parser.add_argument("--calibrate", action="store_true")
     parser.add_argument(
         "--require-provenance",

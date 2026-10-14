@@ -32,7 +32,7 @@ CAMPAIGN_ANSWER = {
 }
 CAMPAIGN_TARGET = json.dumps(CAMPAIGN_ANSWER, sort_keys=True)
 ANSWER_FIELDS = ("recovery_factor", "max_pressure_bar", "cell_water_saturation")
-SCORING_POLICY = "campaign-mass-recovery-complete-artifacts-private-evidence-v4"
+SCORING_POLICY = "campaign-mass-recovery-complete-artifacts-private-evidence-v5"
 
 
 def campaign_sample(sample: Sample, *, contract: dict) -> Sample:

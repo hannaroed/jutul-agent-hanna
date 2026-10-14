@@ -200,7 +200,17 @@ def test_runconfig_hashes_the_tunable_inputs() -> None:
     assert all(len(sha) == 64 for sha in config["skills_sha256"].values())
     assert config["simulator"] == "jutuldarcy"
     assert config["context_window"] == 16_384
+    assert config["context_policy"] == "unscaled-full-request-budget-with-small-window-margin-v7"
+    assert config["small_window_token_margin"] == 1024
+    assert config["summary_policy"] == "complete-observed-facts-with-verbatim-user-request-v2"
+    assert config["tool_result_retention"] == {
+        "filesystem_token_limit": 512,
+        "small_result_max_chars": 2048,
+        "cleared_prefix_lines": 3,
+        "cleared_prefix_max_chars": 512,
+    }
     assert config["path_policy"] == "agent-visible-to-real-path-resolution-v1"
+    assert config["model_output_policy"] == "stop-on-truncated-model-and-summary-output-v2"
     assert config["tool_scheduling"] == "request-sequential-provider-tools-v2"
     assert config["summary_sanitization"] == "strip-internal-reasoning-capsules-v1"
     assert config["message_history_sanitization"] == (
@@ -257,6 +267,11 @@ def test_experiment_autonomous_has_one_goal_and_no_follow_ups() -> None:
     assert sample.metadata["case_count"] == 6
     assert "run_autonomous_campaign_case" in sample.input
     assert "Run one case per `run_julia`" in sample.input
+    assert 'First Julia call: use `run_julia` with exactly `include("campaign.jl")`' in sample.input
+    assert (
+        'starting with the Julia code `run_autonomous_campaign_case("run-cedar")`' in sample.input
+    )
+    assert "it is not a separate tool" in sample.input
     assert "literal pattern `,150,`" in sample.input
 
 
