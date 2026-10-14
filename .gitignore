@@ -52,6 +52,7 @@ site/
 lab-out/
 testbed/
 output/experiments/
+/tmp/
 
 # Local history; active research uses eval/comparisons.py.
 archive/
