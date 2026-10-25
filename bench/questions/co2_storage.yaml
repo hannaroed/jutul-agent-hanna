@@ -1,0 +1,71 @@
+# CO2 storage in a sloped saline aquifer: a 2D vertical cross-section, 1000 m
+# long, 50 m thick and 1 m wide, from the JutulDarcy storage-inventory example.
+# 25 years of injection, then 475 years of migration; open (constant-pressure)
+# left and right boundaries. Answers come from bench/oracles/co2_storage.jl.
+# Status: DRAFT, not yet reviewed (plan day 3). Tolerances: 1% relative unless set.
+dataset: co2_storage
+context: >-
+  The saved output of a CO2 storage simulation: a 2D vertical cross-section of a
+  sloped saline aquifer, 1000 m long, 50 m thick and 1 m wide, with one CO2
+  injector. CO2 is injected for 25 years and then left to migrate until year 500.
+  The left and right edges are held at their initial pressure, so fluid can
+  leave the domain there.
+questions:
+  - id: co2-bhp-end-of-injection
+    tier: easy
+    question: What was the injector's bottom-hole pressure at the end of injection, in bar?
+    answer: {type: quantity, unit: bar}
+    tags: {operations: [lookup, unit_conversion], trap: null}
+  - id: co2-total-injected
+    tier: easy
+    question: How much CO2 was injected in total, in tonnes?
+    answer: {type: quantity, unit: t}
+    tags: {operations: [lookup, unit_conversion], trap: null}
+  - id: co2-injection-rate
+    tier: easy
+    question: At what rate was CO2 injected, in kilograms per day?
+    answer: {type: quantity, unit: kg/day}
+    tags: {operations: [lookup, unit_conversion], trap: "rates are per second in SI"}
+  - id: co2-max-gas-saturation-end-of-injection
+    tier: easy
+    question: What is the highest CO2 (gas) saturation anywhere in the aquifer at the end of injection?
+    answer: {type: quantity, unit: "1"}
+    tags: {operations: [lookup, spatial_aggregate], trap: "phase order: gas is the second phase"}
+  - id: co2-dissolved-fraction-end-of-injection
+    tier: medium
+    question: What fraction of the injected CO2 is dissolved in the brine at the end of injection, in percent?
+    answer: {type: quantity, unit: "%"}
+    tags: {operations: [domain_definition, ratio], trap: "dissolved vs mobile vs residual"}
+  - id: co2-residual-fraction-final
+    tier: medium
+    question: At the end of the simulation, what percentage of the injected CO2 is residually trapped?
+    answer: {type: quantity, unit: "%"}
+    tags: {operations: [domain_definition, ratio], trap: "residual (immobile gas) vs dissolved"}
+  - id: co2-mobile-fraction-final
+    tier: medium
+    question: What percentage of the injected CO2 is still mobile at year 500?
+    answer: {type: quantity, unit: "%"}
+    tags: {operations: [domain_definition, ratio], trap: "denominator is injected, not what remains"}
+  - id: co2-peak-pressure-rise-during-injection
+    tier: medium
+    question: What was the largest pressure rise above the initial pressure, anywhere in the aquifer, during the injection period, in bar?
+    answer: {type: quantity, unit: bar}
+    tags: {operations: [spatial_aggregate, time_aggregate, difference], trap: "peak vs final; rise vs absolute pressure"}
+  - id: co2-mass-in-upper-layer-end-of-injection
+    tier: medium
+    question: >-
+      The aquifer has three layers; the upper one is the top 30% of the cells
+      (layers 1-14 from the top). How many tonnes of CO2 are in that upper layer
+      at the end of injection?
+    answer: {type: quantity, unit: t}
+    tags: {operations: [spatial_region, component_select, unit_conversion], trap: "K = 1 is the top"}
+  - id: co2-leakage-fraction-final
+    tier: hard
+    question: How much of the injected CO2 has left the simulation domain through its open boundaries by year 500, as a percentage of what was injected?
+    answer: {type: quantity, unit: "%"}
+    tags: {operations: [domain_definition, ratio], trap: "leaving the domain vs leaving a region"}
+  - id: co2-leakage-onset
+    tier: hard
+    question: When does the CO2 that has left the domain first exceed 1% of the total injected, in years since injection started?
+    answer: {type: quantity, unit: yr}
+    tags: {operations: [domain_definition, threshold, time_search], trap: "cumulative vs rate"}

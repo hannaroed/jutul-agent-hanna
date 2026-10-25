@@ -1,0 +1,71 @@
+# The EGG model (first ensemble member): a channelised two-phase oil-water
+# reservoir with 8 water injectors and 4 producers on fixed controls, 3600 days.
+# Answers come from bench/oracles/egg_waterflood.jl.
+# Status: DRAFT, not yet reviewed (plan day 3). Tolerances: 1% relative unless set.
+dataset: egg_waterflood
+context: >-
+  The saved output of a waterflood simulation of the EGG benchmark model: a
+  channelised oil reservoir with eight water injectors (INJECT1-8) and four
+  producers (PROD1-4), simulated for 3600 days.
+questions:
+  - id: egg-number-of-wells
+    tier: easy
+    question: How many wells does the model have?
+    answer: {type: quantity, unit: "1"}
+    tags: {operations: [lookup], trap: null}
+  - id: egg-prod2-final-water-cut
+    tier: easy
+    question: What is PROD2's water cut at the end of the simulation, in percent?
+    answer: {type: quantity, unit: "%"}
+    tags: {operations: [lookup, unit_conversion], trap: "fraction vs percent"}
+  - id: egg-max-injector-bhp
+    tier: easy
+    question: What is the highest bottom-hole pressure reached by any injector, in bar?
+    answer: {type: quantity, unit: bar}
+    tags: {operations: [lookup, time_aggregate, unit_conversion], trap: null}
+  - id: egg-field-oil-rate-final
+    tier: easy
+    question: What is the field oil production rate at the end of the simulation, in cubic metres per day?
+    answer: {type: quantity, unit: m3/day}
+    tags: {operations: [lookup, sum_wells, unit_conversion], trap: "production rates are negative"}
+  - id: egg-first-breakthrough-well
+    tier: medium
+    question: Which producer sees water breakthrough first? Take breakthrough as the water cut first exceeding 10%.
+    answer: {type: choice}
+    tags: {operations: [threshold, time_search, compare_wells], trap: "day-1 start-up transient of 1-2% water cut"}
+  - id: egg-first-breakthrough-time
+    tier: medium
+    question: How many days after the start does the first water breakthrough (water cut above 10%) occur at any producer?
+    answer: {type: quantity, unit: day}
+    tags: {operations: [threshold, time_search], trap: "day-1 start-up transient"}
+  - id: egg-cumulative-oil
+    tier: medium
+    question: How much oil did the field produce in total over the simulation, in cubic metres at surface conditions?
+    answer: {type: quantity, unit: m3}
+    tags: {operations: [time_integral, sum_wells], trap: "integrate over every saved step; rates are per second"}
+  - id: egg-top-oil-producer
+    tier: medium
+    question: Which producer produced the most oil over the whole simulation?
+    answer: {type: choice}
+    tags: {operations: [time_integral, compare_wells], trap: "highest final rate vs highest cumulative"}
+  - id: egg-average-pressure-final
+    tier: medium
+    question: What is the pore-volume-weighted average reservoir pressure at the end of the simulation, in bar?
+    answer: {type: quantity, unit: bar}
+    tags: {operations: [spatial_aggregate, weighted_mean, unit_conversion], trap: "weighting by pore volume"}
+  - id: egg-recovery-factor
+    tier: hard
+    question: >-
+      What is the oil recovery factor at the end of the simulation: cumulative oil
+      produced as a percentage of the initial oil in place (pore volume times
+      initial oil saturation)?
+    answer: {type: quantity, unit: "%"}
+    tags: {operations: [time_integral, sum_wells, spatial_aggregate, initial_state, ratio], trap: "initial oil in place from the initial state, not the first saved step"}
+  - id: egg-mass-conserved
+    tier: hard
+    question: >-
+      The reservoir has no-flow boundaries. Is total fluid mass (water plus oil)
+      conserved to within 0.1% of the injected mass over the run, comparing the
+      change in mass in place with the net mass moved by the wells? Answer yes or no.
+    answer: {type: choice}
+    tags: {operations: [physics_check, time_integral, spatial_aggregate, sum_wells], trap: "per-phase balance is off ~2% from well-bore storage; total mass closes"}

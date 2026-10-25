@@ -1,0 +1,39 @@
+# Twelve scenarios of the CO2 storage case: injection rate x 0.5/1/1.5/2 and
+# permeability x 0.5/1/2. Answers come from bench/oracles/co2_ensemble.jl.
+# Status: DRAFT, not yet reviewed (plan day 3).
+# The 0.5 bar pressure-rise limit was chosen from the ensemble's spread of peak
+# rises so that it excludes some scenarios; fixed before any agent run.
+dataset: co2_ensemble
+context: >-
+  The saved output of 12 scenarios (scenario_01 to scenario_12) of a CO2 storage
+  simulation in a 2D sloped saline aquifer cross-section (1000 m x 50 m x 1 m).
+  The scenarios differ in injection rate and rock permeability; each injects for
+  25 years and runs to year 500 with open left and right boundaries.
+questions:
+  - id: ens-scenarios-within-pressure-limit
+    tier: hard
+    question: In how many scenarios does the pressure stay within 0.5 bar of its initial value in every cell at all times?
+    answer: {type: quantity, unit: "1", tolerance: {abs: 0}}
+    tags: {operations: [multi_run, spatial_aggregate, time_aggregate, threshold], trap: "rise vs absolute pressure"}
+  - id: ens-most-stored-within-pressure-limit
+    tier: hard
+    question: >-
+      Of the scenarios whose pressure never rises more than 0.5 bar above its
+      initial value anywhere, which one has the most CO2 left in the domain at
+      year 500?
+    answer: {type: choice}
+    tags: {operations: [multi_run, constraint, spatial_aggregate, time_aggregate, compare_runs], trap: "stored = still in the domain, not injected"}
+  - id: ens-most-leakage-scenario
+    tier: hard
+    question: Which scenario loses the largest share of its injected CO2 through the open boundaries by year 500?
+    answer: {type: choice}
+    tags: {operations: [multi_run, ratio, compare_runs], trap: "share vs mass"}
+  - id: ens-rate-effect-on-leakage
+    tier: hard
+    question: >-
+      At the nominal permeability, compare injecting at half the nominal rate with
+      injecting at twice the nominal rate. By how many percentage points is the
+      share of injected CO2 that leaves the domain by year 500 lower at the high
+      rate?
+    answer: {type: quantity, unit: percentage_point}
+    tags: {operations: [multi_run, ratio, difference], trap: "percentage points vs percent change; finding which runs are nominal"}

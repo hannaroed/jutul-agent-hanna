@@ -1,0 +1,128 @@
+{
+  "co2-bhp-end-of-injection": {
+    "dataset": "co2_storage",
+    "unit": "bar",
+    "value": 167.32257645431298
+  },
+  "co2-dissolved-fraction-end-of-injection": {
+    "dataset": "co2_storage",
+    "unit": "%",
+    "value": 16.272583587676845
+  },
+  "co2-injection-rate": {
+    "dataset": "co2_storage",
+    "unit": "kg/day",
+    "value": 59.03013698630138
+  },
+  "co2-leakage-fraction-final": {
+    "dataset": "co2_storage",
+    "unit": "%",
+    "value": 31.09597965177277
+  },
+  "co2-leakage-onset": {
+    "dataset": "co2_storage",
+    "unit": "yr",
+    "value": 39.0
+  },
+  "co2-mass-in-upper-layer-end-of-injection": {
+    "dataset": "co2_storage",
+    "unit": "t",
+    "value": 412.2694855534084
+  },
+  "co2-max-gas-saturation-end-of-injection": {
+    "dataset": "co2_storage",
+    "unit": "1",
+    "value": 1.0
+  },
+  "co2-mobile-fraction-final": {
+    "dataset": "co2_storage",
+    "unit": "%",
+    "value": 51.99517410851311
+  },
+  "co2-peak-pressure-rise-during-injection": {
+    "dataset": "co2_storage",
+    "unit": "bar",
+    "value": 0.3322283331901394
+  },
+  "co2-residual-fraction-final": {
+    "dataset": "co2_storage",
+    "unit": "%",
+    "value": 16.86329980262871
+  },
+  "co2-total-injected": {
+    "dataset": "co2_storage",
+    "unit": "t",
+    "value": 538.65
+  },
+  "egg-average-pressure-final": {
+    "dataset": "egg_waterflood",
+    "unit": "bar",
+    "value": 401.4015319494772
+  },
+  "egg-cumulative-oil": {
+    "dataset": "egg_waterflood",
+    "unit": "m3",
+    "value": 496953.12458695914
+  },
+  "egg-field-oil-rate-final": {
+    "dataset": "egg_waterflood",
+    "unit": "m3/day",
+    "value": 15.934511440005975
+  },
+  "egg-first-breakthrough-time": {
+    "dataset": "egg_waterflood",
+    "unit": "day",
+    "value": 195.0
+  },
+  "egg-first-breakthrough-well": {
+    "choice": "PROD2",
+    "dataset": "egg_waterflood"
+  },
+  "egg-mass-conserved": {
+    "choice": "yes",
+    "dataset": "egg_waterflood",
+    "max_relative_error": 4.008886791171234e-6
+  },
+  "egg-max-injector-bhp": {
+    "dataset": "egg_waterflood",
+    "unit": "bar",
+    "value": 412.5225064774555
+  },
+  "egg-number-of-wells": {
+    "dataset": "egg_waterflood",
+    "unit": "1",
+    "value": 12.0
+  },
+  "egg-prod2-final-water-cut": {
+    "dataset": "egg_waterflood",
+    "unit": "%",
+    "value": 97.34959343356296
+  },
+  "egg-recovery-factor": {
+    "dataset": "egg_waterflood",
+    "unit": "%",
+    "value": 58.12845909669629
+  },
+  "egg-top-oil-producer": {
+    "choice": "PROD2",
+    "dataset": "egg_waterflood"
+  },
+  "ens-most-leakage-scenario": {
+    "choice": "scenario_09",
+    "dataset": "co2_ensemble"
+  },
+  "ens-most-stored-within-pressure-limit": {
+    "choice": "scenario_07",
+    "dataset": "co2_ensemble"
+  },
+  "ens-rate-effect-on-leakage": {
+    "dataset": "co2_ensemble",
+    "unit": "percentage_point",
+    "value": 22.26256058880921
+  },
+  "ens-scenarios-within-pressure-limit": {
+    "dataset": "co2_ensemble",
+    "unit": "1",
+    "value": 8.0
+  }
+}
