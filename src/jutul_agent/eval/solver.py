@@ -174,6 +174,7 @@ async def _run_jutul_session(
     scratch: Path,
     store: Any,
     ground_truth: str | None = None,
+    harness_strategies: Any | None = None,
 ) -> str:
     from jutul_agent.paths import set_workspace_root
     from jutul_agent.simulators import registry
@@ -209,7 +210,10 @@ async def _run_jutul_session(
 
     from jutul_agent.eval.runconfig import build_runconfig
 
-    store.set(STORE_RUNCONFIG, build_runconfig(adapter, julia_project=julia_project))
+    runconfig = build_runconfig(adapter, julia_project=julia_project)
+    if harness_strategies is not None:
+        runconfig["harness_strategies"] = harness_strategies.to_dict()
+    store.set(STORE_RUNCONFIG, runconfig)
 
     # Persist the session trace to a discoverable eval workspace under the state
     # home (not the temp scratch, which is cleaned up) so eval runs — where the
@@ -236,6 +240,7 @@ async def _run_jutul_session(
         discover=False,
         warmup=False,
         virtual_display=needs_display,
+        harness_strategies=harness_strategies,
     )
     try:
         store.set(STORE_WORKSPACE, str(workspace))
@@ -256,8 +261,14 @@ async def _run_jutul_session(
 
 
 @solver
-def jutul_agent_solver(simulator: str = "jutuldarcy") -> Solver:
-    """Solve each sample by handing it to a fresh jutul-agent session."""
+def jutul_agent_solver(
+    simulator: str = "jutuldarcy", harness_strategies: Any | None = None
+) -> Solver:
+    """Solve each sample by handing it to a fresh jutul-agent session.
+
+    ``harness_strategies`` (an ``agent.strategies.HarnessStrategies``) switches
+    harness parts for a controlled comparison; ``None`` is the stock harness.
+    """
 
     async def solve(state: TaskState, generate: Generate) -> TaskState:
         fixtures = state.metadata.get("fixtures", {})
@@ -278,6 +289,7 @@ def jutul_agent_solver(simulator: str = "jutuldarcy") -> Solver:
                 scratch=scratch,
                 store=state.store,
                 ground_truth=state.metadata.get("expected"),
+                harness_strategies=harness_strategies,
             )
 
         # The bridge tracked the real conversation; the completion graded by

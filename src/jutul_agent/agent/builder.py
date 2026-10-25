@@ -41,12 +41,14 @@ from jutul_agent.agent.capabilities import (
     select_for_surface,
 )
 from jutul_agent.agent.context_editing import build_context_editing_middleware
+from jutul_agent.agent.describe_output import make_describe_output_tool
 from jutul_agent.agent.memory import (
     build_memory_middleware,
     ensure_memory_dir,
     make_remember_tool,
 )
 from jutul_agent.agent.openai_responses import enable_reasoning_item_grouping
+from jutul_agent.agent.output_budget import OutputBudgetMiddleware
 from jutul_agent.agent.plot_julia import (
     make_close_plots_tool,
     make_plot_julia_tool,
@@ -54,6 +56,7 @@ from jutul_agent.agent.plot_julia import (
 )
 from jutul_agent.agent.prompts import assemble_session_prompt
 from jutul_agent.agent.recovery import InvalidToolCallRecoveryMiddleware
+from jutul_agent.agent.strategies import HarnessStrategies
 from jutul_agent.agent.tools import (
     make_record_attempt_tool,
     make_reset_julia_tool,
@@ -190,13 +193,18 @@ def _ollama_settings(model_id: str) -> dict[str, Any]:
 
 
 def _openai_settings(model_id: str) -> dict[str, Any] | None:
+    # Ask for token usage on streamed replies. langchain-openai requests it only
+    # for OpenAI's own endpoint, so behind OPENAI_BASE_URL (vLLM, LiteLLM, a
+    # university gateway) replies carried no usage_metadata and the trace got
+    # no model_usage events at all.
+    settings: dict[str, Any] = {"stream_usage": True}
     # The profile must also mark the temperature parameter unsupported: that
     # separates true reasoning models (which accept reasoning.effort) from
     # the -chat hybrids (which reject it).
     profile = model_profile(model_id)
     if profile.get("reasoning_output") and profile.get("temperature") is False:
-        return {"reasoning": dict(_OPENAI_REASONING)}
-    return None
+        settings["reasoning"] = dict(_OPENAI_REASONING)
+    return settings
 
 
 def _anthropic_settings(model_id: str) -> dict[str, Any] | None:
@@ -394,6 +402,35 @@ def skill_sources(adapter: SimulatorAdapter) -> list[str | tuple[str, str]]:
     return sources
 
 
+# Skills only a benchmark condition loads (HarnessStrategies.output_skill).
+CONDITION_SKILLS_DIR = Path(__file__).parent / "condition_skills"
+
+# The H0 harness's whole prompt: no simulator guidance, skills or workflow.
+MINIMAL_SYSTEM_PROMPT = (
+    "You are an assistant with a persistent Julia session. Run Julia code with "
+    "the run_julia tool; variables and loaded packages persist between calls. "
+    "Answer the user's question."
+)
+
+
+def _build_minimal_agent(session: Session, model: Any, checkpointer: Any | None) -> Any:
+    """The H0 harness: the model, one run_julia tool and a generic prompt.
+
+    No filesystem tools, skills, subagents, planning, memory, clearing,
+    summarization or recovery: only the trace recorder, so the run is measured
+    the same way as every other condition.
+    """
+    from langchain.agents import create_agent
+
+    return create_agent(
+        model=model,
+        tools=[make_run_julia_tool(session)],
+        system_prompt=MINIMAL_SYSTEM_PROMPT,
+        middleware=[TraceRecorder(session.trace)],
+        checkpointer=checkpointer,
+    )
+
+
 def build_agent(
     session: Session,
     *,
@@ -404,6 +441,7 @@ def build_agent(
     added_dirs: Sequence[str | Path] | None = None,
     surface: str | None = None,
     extensions: Sequence[Capability] = (),
+    harness_strategies: HarnessStrategies | None = None,
 ) -> tuple[Any, CompositeBackend]:
     """Build the session agent and return it with its live ``CompositeBackend``.
 
@@ -415,9 +453,13 @@ def build_agent(
 
     ``surface`` defaults to ``session.surface``; pass it explicitly only to
     override what the session was created with.
+
+    ``harness_strategies`` switches parts of the harness off for controlled
+    comparisons; the default is the stock harness.
     """
     if surface is None:
         surface = session.surface
+    strategies = harness_strategies or HarnessStrategies()
 
     register_provider_profiles()
     # The file tools run on real paths; on Windows, let deepagents' path validation
@@ -460,6 +502,12 @@ def build_agent(
     skills = skill_sources(session.simulator) + collect_skill_dirs(active)
     model_spec = resolve_model(model)
     resolved_model = _resolve_model_for_agent(model_spec)
+    if strategies.minimal:
+        return _build_minimal_agent(session, resolved_model, checkpointer), backend
+    if strategies.describe_output:
+        tools.append(make_describe_output_tool(session))
+    if strategies.output_skill:
+        skills.append((str(CONDITION_SKILLS_DIR), "Benchmark condition"))
     agent = create_deep_agent(
         model=resolved_model,
         backend=backend,
@@ -493,7 +541,14 @@ def build_agent(
                 build_memory_middleware(backend, memory_dir),
                 build_context_editing_middleware(
                     model_id=model_spec if isinstance(model_spec, str) else None,
-                ),
+                )
+                if strategies.clear_tool_results
+                else None,
+                # Inside the stock eviction (deepagents' own middleware wraps
+                # ours), so a result is cut to the budget before eviction sees it.
+                OutputBudgetMiddleware(strategies.output_budget_chars)
+                if strategies.output_budget_chars
+                else None,
                 # Before the recorder in the list so its after_model hook runs
                 # after the recorder's (after_model composes in reverse): the
                 # model call is traced before a recovery jump re-enters the model.

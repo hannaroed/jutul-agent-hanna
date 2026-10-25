@@ -710,3 +710,59 @@ def julia_probe_count() -> Scorer:
         return Score(value=count, explanation=f"{count} API-probe REPL calls")
 
     return score
+
+
+# Generic cost scorers: what an answer cost, independent of what was asked.
+
+
+@scorer(metrics=[mean(), stderr()])
+def context_compaction_count() -> Scorer:
+    """How many automatic or manual context compactions the trace records."""
+
+    async def score(state: TaskState, target: Target) -> Score:
+        count = sum(1 for event in _trace_events(state) if event.kind == schema.CONTEXT_COMPACTION)
+        return Score(value=count, explanation=f"{count} context compactions")
+
+    return score
+
+
+@scorer(metrics=[mean(), stderr()])
+def tool_result_character_count(tools: tuple[str, ...] | None = None) -> Scorer:
+    """Count tool-result characters, optionally restricted to named tools."""
+
+    async def score(state: TaskState, target: Target) -> Score:
+        total = 0
+        for event in _trace_events(state):
+            if event.kind != schema.TOOL_RESULT:
+                continue
+            if tools is not None and str(event.payload.get("name", "")) not in tools:
+                continue
+            total += len(str(event.payload.get("content", "")))
+        return Score(value=total, explanation=f"{total} tool-result characters")
+
+    return score
+
+
+@scorer(metrics={"*": [mean(), stderr()]})
+def token_usage() -> Scorer:
+    """Token cost from the trace's ``model_usage`` events.
+
+    ``peak_input`` is the largest single prompt, the context size the run
+    actually reached; ``cached`` is the prompt tokens the provider served from
+    its cache (0 when it reports none).
+    """
+
+    async def score(state: TaskState, target: Target) -> Score:
+        usage = [e.payload for e in _trace_events(state) if e.kind == schema.MODEL_USAGE]
+        value = {
+            "input": sum(int(u.get("input_tokens") or 0) for u in usage),
+            "output": sum(int(u.get("output_tokens") or 0) for u in usage),
+            "cached": sum(
+                int((u.get("input_token_details") or {}).get("cache_read") or 0) for u in usage
+            ),
+            "peak_input": max((int(u.get("input_tokens") or 0) for u in usage), default=0),
+            "model_calls": len(usage),
+        }
+        return Score(value=value, explanation=f"{value}")
+
+    return score

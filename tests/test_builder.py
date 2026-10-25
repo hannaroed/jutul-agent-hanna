@@ -122,6 +122,22 @@ def test_resolve_model_for_agent_enables_openai_reasoning(
         assert getattr(plain, "reasoning", None) is None, spec
 
 
+def test_resolve_model_for_agent_requests_usage_behind_a_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An OpenAI-compatible server still reports token usage on streamed replies.
+
+    langchain-openai asks for streamed usage only on OpenAI's own endpoint, so a
+    model behind OPENAI_BASE_URL left the trace without any model_usage events.
+    """
+    from jutul_agent.agent.builder import _resolve_model_for_agent
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://llm.example.edu/v1")
+    model = _resolve_model_for_agent("openai:Qwen/Qwen3.8-27B-FP8")
+    assert getattr(model, "stream_usage", None) is True
+
+
 def test_resolve_model_for_agent_enables_anthropic_thinking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -291,3 +307,113 @@ def test_agent_drops_delegation_without_a_subagent(
     )
     agent, _ = build_agent(session, model=_resolve_model_for_agent("openai:gpt-5.4-mini"))
     assert "task" not in set(agent.nodes["tools"].bound.tools_by_name)
+
+
+@pytest.mark.parametrize("clear", [True, False])
+def test_harness_strategies_switch_tool_result_clearing(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, clear: bool
+) -> None:
+    """The default keeps the stock clearing; switching it off drops the middleware."""
+    from jutul_agent.agent import builder
+    from jutul_agent.agent.strategies import HarnessStrategies
+    from jutul_agent.lab.fakes import (
+        FakeJulia,
+        make_fake_adapter,
+        make_scripted_model,
+        scripted_final,
+    )
+    from jutul_agent.session import Session
+
+    built = []
+    real = builder.build_context_editing_middleware
+    monkeypatch.setattr(
+        builder,
+        "build_context_editing_middleware",
+        lambda **kw: built.append(kw) or real(**kw),
+    )
+    session = Session.create(
+        julia=FakeJulia(), state_root=tmp_path, simulator=make_fake_adapter(tmp_path)
+    )
+    strategies = None if clear else HarnessStrategies(clear_tool_results=False)
+    builder.build_agent(
+        session,
+        model=make_scripted_model([scripted_final("done")]),
+        harness_strategies=strategies,
+    )
+    assert bool(built) is clear
+
+
+def test_harness_strategies_reject_non_booleans() -> None:
+    from jutul_agent.agent.strategies import HarnessStrategies
+
+    with pytest.raises(TypeError):
+        HarnessStrategies(clear_tool_results="no")  # type: ignore[arg-type]
+    assert HarnessStrategies().to_dict()["clear_tool_results"] is True
+
+
+def _condition_tools(tmp_path, name: str) -> set[str]:
+    from jutul_agent.agent.builder import build_agent
+    from jutul_agent.agent.strategies import HarnessStrategies
+    from jutul_agent.lab.fakes import (
+        FakeJulia,
+        make_fake_adapter,
+        make_scripted_model,
+        scripted_final,
+    )
+    from jutul_agent.session import Session
+
+    session = Session.create(
+        julia=FakeJulia(), state_root=tmp_path, simulator=make_fake_adapter(tmp_path)
+    )
+    agent, _ = build_agent(
+        session,
+        model=make_scripted_model([scripted_final("done")]),
+        harness_strategies=HarnessStrategies.condition(name),
+    )
+    return set(agent.nodes["tools"].bound.tools_by_name)
+
+
+def test_minimal_condition_offers_only_run_julia(tmp_path) -> None:
+    assert _condition_tools(tmp_path, "H0") == {"run_julia"}
+
+
+def test_budgeted_condition_adds_describe_output(tmp_path) -> None:
+    tools = _condition_tools(tmp_path, "H2")
+    assert "describe_output" in tools
+    assert {"run_julia", "read_file", "write_todos"} <= tools
+    assert "describe_output" not in _condition_tools(tmp_path / "h1", "H1")
+
+
+def test_conditions_are_named_and_validated() -> None:
+    from jutul_agent.agent.output_budget import DEFAULT_BUDGET_CHARS
+    from jutul_agent.agent.strategies import HarnessStrategies
+
+    assert HarnessStrategies.condition("h1") == HarnessStrategies()
+    h2 = HarnessStrategies.condition("H2")
+    assert h2.output_budget_chars == DEFAULT_BUDGET_CHARS and h2.output_skill
+    assert not HarnessStrategies.condition("H2-noskill").output_skill
+    assert HarnessStrategies.condition("H2-nobudget").output_budget_chars is None
+    with pytest.raises(ValueError):
+        HarnessStrategies.condition("H9")
+    with pytest.raises(ValueError):
+        HarnessStrategies(minimal=True, describe_output=True)
+    with pytest.raises(ValueError):
+        HarnessStrategies(output_budget_chars=0)
+
+
+def test_output_budget_keeps_start_and_end() -> None:
+    from jutul_agent.agent.output_budget import cap_output
+
+    assert cap_output("short", 100) == "short"
+    text = "A" * 600 + "B" * 600 + "Z" * 100
+    capped = cap_output(text, 400)
+    assert capped.startswith("A" * 300) and capped.endswith("Z" * 100)
+    assert "B" not in capped
+    assert "1300 characters" in capped and "compute the quantity" in capped
+
+
+def test_condition_skill_ships_with_the_package() -> None:
+    from jutul_agent.agent.builder import CONDITION_SKILLS_DIR
+
+    skill = CONDITION_SKILLS_DIR / "output-semantics" / "SKILL.md"
+    assert skill.read_text().startswith("---\nname: output-semantics\n")

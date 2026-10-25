@@ -48,6 +48,7 @@ class SessionHost:
         workspace: Path | None = None,
         package_sources: Sequence[Any] = (),
         add_dirs: Sequence[Path] = (),
+        harness_strategies: Any | None = None,
     ) -> None:
         self.session = session
         self.agent = agent
@@ -66,6 +67,8 @@ class SessionHost:
         self._approval_mode = approval_mode
         self._surface = surface
         self._extensions = list(extensions)
+        # Controlled-comparison switches (agent.strategies); None = stock harness.
+        self._harness_strategies = harness_strategies
         # The resolved env package sources: kept so an in-place rebuild keeps the
         # read-only depot guard and the simulator's source-path prompt note.
         self._package_sources = list(package_sources)
@@ -178,6 +181,7 @@ class SessionHost:
             extensions=self._extensions,
             added_dirs=carried or None,
             package_sources=self._package_sources or None,
+            harness_strategies=self._harness_strategies,
         )
         self.agent, self.backend = agent, backend
         self._model, self._approval_mode = new_model, new_approval
@@ -435,6 +439,7 @@ class SessionHost:
         allow_missing_credential: bool = False,
         extensions: Sequence[Capability] = (),
         sysimage: bool | None = None,
+        harness_strategies: Any | None = None,
     ) -> SessionHost:
         """Stand up a real session: prepare the env, start the kernel, build the agent.
 
@@ -615,6 +620,7 @@ class SessionHost:
                     extensions=all_extensions,
                     added_dirs=add_dirs or None,
                     package_sources=package_sources,
+                    harness_strategies=harness_strategies,
                 )
         except BaseException:
             await stack.aclose()
@@ -633,6 +639,7 @@ class SessionHost:
             workspace=ws,
             package_sources=package_sources,
             add_dirs=add_dirs,
+            harness_strategies=harness_strategies,
         )
         if warmup:
             # Warm the kernel in the background: load the warm packages and set
