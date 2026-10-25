@@ -1,0 +1,915 @@
+{
+  "schema": "jutul-result-memory-pilot-export-v1",
+  "policy": "result-memory-cached-metrics-v5",
+  "trials": [
+    {
+      "order": 1,
+      "key": [
+        "short",
+        0,
+        0,
+        1
+      ],
+      "phase": "short",
+      "campaign": "waterflood-a",
+      "condition": "generic",
+      "trial": 1,
+      "seed": 1001,
+      "full_pass": false,
+      "technical_failure": false,
+      "scores": {
+        "scientific_answer": "I",
+        "scientific_sources": "C",
+        "tool_result_numeric_evidence": "I",
+        "study_integrity": "I",
+        "tool_call_count": 3,
+        "context_compaction_count": 0
+      },
+      "score_explanations": {
+        "scientific_answer": "missing, malformed or incorrect answer.json",
+        "scientific_sources": "canonical source rows retrieved",
+        "tool_result_numeric_evidence": "no successful retrieval exposed the required artifact row/values",
+        "study_integrity": "current campaign status was not retrieved",
+        "tool_call_count": "3 tool calls",
+        "context_compaction_count": "0 context compactions"
+      },
+      "answer": {
+        "run_id": "case-12",
+        "late_oil_yield_kg_m3": 473.4274459893889,
+        "peak_pressure_bar": 517.0454468317906,
+        "cell_water_saturation": 0.7497947615571485
+      },
+      "expected": {
+        "run_id": "case-76",
+        "late_oil_yield_kg_m3": 453.36362727468344,
+        "peak_pressure_bar": 391.98961112291926,
+        "cell_water_saturation": 0.8529383760035563
+      },
+      "total_model_tokens": 46583,
+      "working_seconds": 21.865,
+      "manual_review": "Short control A skipped campaign-status.csv and chose invalid case-12. Original failure retained.",
+      "harness_strategies": {
+        "summarization": "generic",
+        "clear_tool_results": true,
+        "sequential_tools": true,
+        "sanitize_history": true
+      },
+      "evidence": {
+        "log": "logs/2026-10-13T23-16-51-00-00_result-memory_ALR7JMqwBGvFPipW8vFH4m.eval",
+        "log_sha256": "e7a677ebc53afc735d140016e93299fd06772cd60ff8874e6df40938f058a742",
+        "archive": "state/eval-archives/41b9f58ff4784b69a2c4e764de8cc5aa",
+        "archive_manifest_sha256": "716b6671cff7ad79f08665ca632be6d77ab394ea68c07fabdd958747e7fc460f",
+        "source_manifest_sha256": "b0b9732f041952cf5aa9390a5c658676aad60d8d02c8fcb988be9ebe72f8923e"
+      }
+    },
+    {
+      "order": 2,
+      "key": [
+        "short",
+        1,
+        0,
+        1
+      ],
+      "phase": "short",
+      "campaign": "waterflood-b",
+      "condition": "generic",
+      "trial": 1,
+      "seed": 1001,
+      "full_pass": true,
+      "technical_failure": false,
+      "scores": {
+        "scientific_answer": "C",
+        "scientific_sources": "C",
+        "tool_result_numeric_evidence": "C",
+        "study_integrity": "C",
+        "tool_call_count": 5,
+        "context_compaction_count": 0
+      },
+      "score_explanations": {
+        "scientific_answer": "answer.json matches the reference",
+        "scientific_sources": "canonical source rows retrieved",
+        "tool_result_numeric_evidence": "successful grep exposed exact artifact row",
+        "study_integrity": "inputs and current status verified",
+        "tool_call_count": "5 tool calls",
+        "context_compaction_count": "0 context compactions"
+      },
+      "answer": {
+        "run_id": "case-03",
+        "late_oil_yield_kg_m3": 494.47026346549586,
+        "peak_pressure_bar": 371.63827007478073,
+        "cell_water_saturation": 0.981833082706993
+      },
+      "expected": {
+        "run_id": "case-03",
+        "late_oil_yield_kg_m3": 494.47026346549586,
+        "peak_pressure_bar": 371.63827007478073,
+        "cell_water_saturation": 0.981833082706993
+      },
+      "total_model_tokens": 71023,
+      "working_seconds": 21.195,
+      "manual_review": "Short control B read current status, selected case-03 and retrieved cell73; all checks passed.",
+      "harness_strategies": {
+        "summarization": "generic",
+        "clear_tool_results": true,
+        "sequential_tools": true,
+        "sanitize_history": true
+      },
+      "evidence": {
+        "log": "logs/2026-10-13T23-18-02-00-00_result-memory_gMnVyLkTgCr2F2wt4ZRby8.eval",
+        "log_sha256": "3d937674a6698f23d6274090b790db65bfad656030a78a154c7488019257077a",
+        "archive": "state/eval-archives/ad72cd2358b54d5bb26f5c5ac8592c10",
+        "archive_manifest_sha256": "c721b7369201231a3b10dad3a12f3b65a0f6c2d9caea9abed3f11e27ae5da09c",
+        "source_manifest_sha256": "b0b9732f041952cf5aa9390a5c658676aad60d8d02c8fcb988be9ebe72f8923e"
+      }
+    },
+    {
+      "order": 3,
+      "key": [
+        "long",
+        0,
+        0,
+        1
+      ],
+      "phase": "long",
+      "campaign": "waterflood-a",
+      "condition": "generic",
+      "trial": 1,
+      "seed": 1001,
+      "full_pass": true,
+      "technical_failure": false,
+      "scores": {
+        "scientific_answer": "C",
+        "scientific_sources": "C",
+        "tool_result_numeric_evidence": "C",
+        "study_integrity": "C",
+        "tool_call_count": 21,
+        "context_compaction_count": 3
+      },
+      "score_explanations": {
+        "scientific_answer": "answer.json matches the reference",
+        "scientific_sources": "canonical source rows retrieved",
+        "tool_result_numeric_evidence": "successful grep exposed exact artifact row",
+        "study_integrity": "inputs and current status verified",
+        "tool_call_count": "21 tool calls",
+        "context_compaction_count": "3 context compactions"
+      },
+      "answer": {
+        "run_id": "case-76",
+        "late_oil_yield_kg_m3": 453.363627,
+        "peak_pressure_bar": 391.989611,
+        "cell_water_saturation": 0.8529383760035563
+      },
+      "expected": {
+        "run_id": "case-76",
+        "late_oil_yield_kg_m3": 453.36362727468344,
+        "peak_pressure_bar": 391.98961112291926,
+        "cell_water_saturation": 0.8529383760035563
+      },
+      "total_model_tokens": 351283,
+      "working_seconds": 119.671,
+      "manual_review": "Generic A: correct final result after3 compactions. Summaries invented /workspace/ paths and later said no artifacts despite working notes. Canonical files recovered facts.",
+      "harness_strategies": {
+        "summarization": "generic",
+        "clear_tool_results": true,
+        "sequential_tools": true,
+        "sanitize_history": true
+      },
+      "evidence": {
+        "log": "logs/2026-10-13T23-19-22-00-00_result-memory_A32Bz3JNDUPqSERNPgLunQ.eval",
+        "log_sha256": "3d005e36efb8a402f6584e0362aa68eca2e561e160a94b0df5e3aa538718bc9f",
+        "archive": "state/eval-archives/6af7ecb1a44a4579a9b7cdd753787b56",
+        "archive_manifest_sha256": "8c92fa85268f903fa8255c1df2a0b986eca7bd9e81ab0625a7d030aa28110f3d",
+        "source_manifest_sha256": "b0b9732f041952cf5aa9390a5c658676aad60d8d02c8fcb988be9ebe72f8923e"
+      }
+    },
+    {
+      "order": 4,
+      "key": [
+        "long",
+        0,
+        1,
+        1
+      ],
+      "phase": "long",
+      "campaign": "waterflood-a",
+      "condition": "scientific",
+      "trial": 1,
+      "seed": 1001,
+      "full_pass": true,
+      "technical_failure": false,
+      "scores": {
+        "scientific_answer": "C",
+        "scientific_sources": "C",
+        "tool_result_numeric_evidence": "C",
+        "study_integrity": "C",
+        "tool_call_count": 35,
+        "context_compaction_count": 6
+      },
+      "score_explanations": {
+        "scientific_answer": "answer.json matches the reference",
+        "scientific_sources": "canonical source rows retrieved",
+        "tool_result_numeric_evidence": "successful grep exposed exact artifact row",
+        "study_integrity": "inputs and current status verified",
+        "tool_call_count": "35 tool calls",
+        "context_compaction_count": "6 context compactions"
+      },
+      "answer": {
+        "run_id": "case-76",
+        "late_oil_yield_kg_m3": 453.36362727468344,
+        "peak_pressure_bar": 391.98961112291926,
+        "cell_water_saturation": 0.8529383760035563
+      },
+      "expected": {
+        "run_id": "case-76",
+        "late_oil_yield_kg_m3": 453.36362727468344,
+        "peak_pressure_bar": 391.98961112291926,
+        "cell_water_saturation": 0.8529383760035563
+      },
+      "total_model_tokens": 540709,
+      "working_seconds": 192.361,
+      "manual_review": "Scientific A: correct final result after6 compactions, but last summary mislabeled recovery_factor 0.40671440693457744 as cell_water_saturation (true0.8529383760035563). Final source row check corrected this. More tokens/calls than paired generic pilot; no improvement claim.",
+      "harness_strategies": {
+        "summarization": "scientific",
+        "clear_tool_results": true,
+        "sequential_tools": true,
+        "sanitize_history": true
+      },
+      "evidence": {
+        "log": "logs/2026-10-13T23-21-48-00-00_result-memory_LSDW8ywzzaeUypQHrf8Gef.eval",
+        "log_sha256": "11e75975213fc3555dd052ae4c1e04a5ee832ce05bac48a695247009ff9775e4",
+        "archive": "state/eval-archives/f5e5968d7ab84066aafdfaf8b645181f",
+        "archive_manifest_sha256": "f3db702a2b5d168765dacf67acd8d17a1f8b7beceeab9ed7aacfb1ae71ce3b43",
+        "source_manifest_sha256": "b0b9732f041952cf5aa9390a5c658676aad60d8d02c8fcb988be9ebe72f8923e"
+      }
+    },
+    {
+      "order": 5,
+      "key": [
+        "long",
+        1,
+        1,
+        1
+      ],
+      "phase": "long",
+      "campaign": "waterflood-b",
+      "condition": "scientific",
+      "trial": 1,
+      "seed": 1001,
+      "full_pass": false,
+      "technical_failure": false,
+      "scores": {
+        "scientific_answer": "I",
+        "scientific_sources": "C",
+        "tool_result_numeric_evidence": "C",
+        "study_integrity": "C",
+        "tool_call_count": 31,
+        "context_compaction_count": 6
+      },
+      "score_explanations": {
+        "scientific_answer": "missing, malformed or incorrect answer.json",
+        "scientific_sources": "canonical source rows retrieved",
+        "tool_result_numeric_evidence": "successful grep exposed exact artifact row",
+        "study_integrity": "inputs and current status verified",
+        "tool_call_count": "31 tool calls",
+        "context_compaction_count": "6 context compactions"
+      },
+      "answer": {
+        "run_id": "case-03",
+        "late_oil_yield_kg_m3": 494.47,
+        "peak_pressure_bar": 237.50743246095092,
+        "cell_water_saturation": 0.981833082706993
+      },
+      "expected": {
+        "run_id": "case-03",
+        "late_oil_yield_kg_m3": 494.47026346549586,
+        "peak_pressure_bar": 371.63827007478073,
+        "cell_water_saturation": 0.981833082706993
+      },
+      "total_model_tokens": 493718,
+      "working_seconds": 191.622,
+      "manual_review": "Scientific B, seed1001: wrong final answer. Correct winner case-03 and cell73, but final-time max_pressure_bar 237.50743246095092 was substituted for whole-history peak_pressure_bar 371.63827007478073. All canonical metric rows were retrieved once; source/integrity checks passed. Later summaries conflated the two pressure metrics. No repeated metric-file retrieval recovered the whole-history peak. Failure retained; no technical fault.",
+      "harness_strategies": {
+        "summarization": "scientific",
+        "clear_tool_results": true,
+        "sequential_tools": true,
+        "sanitize_history": true
+      },
+      "evidence": {
+        "log": "logs/2026-10-14T03-44-45-00-00_result-memory_XduYqRhE87XkkdDSLCwZYo.eval",
+        "log_sha256": "9e0e3e77ce1c1c3d2e1dcda7cc9f6f83011c310706240c76e9b5f8d6c8d9e57f",
+        "archive": "state/eval-archives/1f01edd0968b4a18b87bf1c9352c78bb",
+        "archive_manifest_sha256": "64f040797adaa66f41c954bc945d5c7ecb8203431428bfe2e4825a37aa98ffd7",
+        "source_manifest_sha256": "4f7ea67f613c0ca5e7a66b1285bde839a92a55550b6aa48680ff8628bfe82f1b"
+      }
+    },
+    {
+      "order": 6,
+      "key": [
+        "long",
+        1,
+        0,
+        1
+      ],
+      "phase": "long",
+      "campaign": "waterflood-b",
+      "condition": "generic",
+      "trial": 1,
+      "seed": 1001,
+      "full_pass": true,
+      "technical_failure": false,
+      "scores": {
+        "scientific_answer": "C",
+        "scientific_sources": "C",
+        "tool_result_numeric_evidence": "C",
+        "study_integrity": "C",
+        "tool_call_count": 33,
+        "context_compaction_count": 6
+      },
+      "score_explanations": {
+        "scientific_answer": "answer.json matches the reference",
+        "scientific_sources": "canonical source rows retrieved",
+        "tool_result_numeric_evidence": "successful grep exposed exact artifact row",
+        "study_integrity": "inputs and current status verified",
+        "tool_call_count": "33 tool calls",
+        "context_compaction_count": "6 context compactions"
+      },
+      "answer": {
+        "run_id": "case-03",
+        "late_oil_yield_kg_m3": 494.47026346549586,
+        "peak_pressure_bar": 371.63827007478073,
+        "cell_water_saturation": 0.981833082706993
+      },
+      "expected": {
+        "run_id": "case-03",
+        "late_oil_yield_kg_m3": 494.47026346549586,
+        "peak_pressure_bar": 371.63827007478073,
+        "cell_water_saturation": 0.981833082706993
+      },
+      "total_model_tokens": 511022,
+      "working_seconds": 199.594,
+      "manual_review": "Generic B, seed1001: all checks passed after6 compactions and33 tool calls. A guessed nonexistent case-08 file produced a recovered model tool error. Working notes and repeated canonical metric retrieval preserved whole-history pressure and the current invalidation; final case-03/cell73 answer matched exactly. Actual API request sizes/configuration passed.",
+      "harness_strategies": {
+        "summarization": "generic",
+        "clear_tool_results": true,
+        "sequential_tools": true,
+        "sanitize_history": true
+      },
+      "evidence": {
+        "log": "logs/2026-10-14T03-47-58-00-00_result-memory_6TsmBuvV7RCTox2rzYY25u.eval",
+        "log_sha256": "93cc3b46f84f49d2ed0f7be7068b8ddbee36c2da1ab66ee28adc1d4258e6f38b",
+        "archive": "state/eval-archives/38fe6c001b814fd2afd5fc253fc97c16",
+        "archive_manifest_sha256": "99df289c541d4d114348c396d901a48cdd7bc8f5e5dc692dca72212f809139f8",
+        "source_manifest_sha256": "4f7ea67f613c0ca5e7a66b1285bde839a92a55550b6aa48680ff8628bfe82f1b"
+      }
+    },
+    {
+      "order": 7,
+      "key": [
+        "long",
+        0,
+        0,
+        2
+      ],
+      "phase": "long",
+      "campaign": "waterflood-a",
+      "condition": "generic",
+      "trial": 2,
+      "seed": 1002,
+      "full_pass": true,
+      "technical_failure": false,
+      "scores": {
+        "scientific_answer": "C",
+        "scientific_sources": "C",
+        "tool_result_numeric_evidence": "C",
+        "study_integrity": "C",
+        "tool_call_count": 19,
+        "context_compaction_count": 4
+      },
+      "score_explanations": {
+        "scientific_answer": "answer.json matches the reference",
+        "scientific_sources": "canonical source rows retrieved",
+        "tool_result_numeric_evidence": "successful grep exposed exact artifact row",
+        "study_integrity": "inputs and current status verified",
+        "tool_call_count": "19 tool calls",
+        "context_compaction_count": "4 context compactions"
+      },
+      "answer": {
+        "run_id": "case-94",
+        "late_oil_yield_kg_m3": 453.36362727468344,
+        "peak_pressure_bar": 391.98961112291926,
+        "cell_water_saturation": 0.006332091036630685
+      },
+      "expected": {
+        "run_id": "case-94",
+        "late_oil_yield_kg_m3": 453.36362727468344,
+        "peak_pressure_bar": 391.98961112291926,
+        "cell_water_saturation": 0.006332091036630685
+      },
+      "total_model_tokens": 330412,
+      "working_seconds": 125.132,
+      "manual_review": "Generic A, seed1002: all checks passed after4 compactions and19 tool calls. Six canonical metric files were each read once; working.csv preserved values and updated invalidation. Retrieved requested cell30 from case-94 and wrote exact reference answer. Summary paths sometimes added a workspace/ prefix, but final retrieval used actual artifact paths. Actual API request sizes/configuration passed.",
+      "harness_strategies": {
+        "summarization": "generic",
+        "clear_tool_results": true,
+        "sequential_tools": true,
+        "sanitize_history": true
+      },
+      "evidence": {
+        "log": "logs/2026-10-14T03-51-20-00-00_result-memory_Jthb2YdJP6VssYnTn4DMzr.eval",
+        "log_sha256": "cf7e64e6c1866029fc065993d6906f2889a912166b51707202e22fa2e1e257b8",
+        "archive": "state/eval-archives/52b8e44f3b3445edb063282b05afc517",
+        "archive_manifest_sha256": "5719792366a098e581b3ecd398cfc21bda3fcc01e442ddb425a30685895c2063",
+        "source_manifest_sha256": "4f7ea67f613c0ca5e7a66b1285bde839a92a55550b6aa48680ff8628bfe82f1b"
+      }
+    },
+    {
+      "order": 8,
+      "key": [
+        "long",
+        1,
+        1,
+        2
+      ],
+      "phase": "long",
+      "campaign": "waterflood-b",
+      "condition": "scientific",
+      "trial": 2,
+      "seed": 1002,
+      "full_pass": false,
+      "technical_failure": false,
+      "scores": {
+        "scientific_answer": "I",
+        "scientific_sources": "C",
+        "tool_result_numeric_evidence": "C",
+        "study_integrity": "C",
+        "tool_call_count": 24,
+        "context_compaction_count": 4
+      },
+      "score_explanations": {
+        "scientific_answer": "missing, malformed or incorrect answer.json",
+        "scientific_sources": "canonical source rows retrieved",
+        "tool_result_numeric_evidence": "successful grep exposed exact artifact row",
+        "study_integrity": "inputs and current status verified",
+        "tool_call_count": "24 tool calls",
+        "context_compaction_count": "4 context compactions"
+      },
+      "answer": {
+        "run_id": "case-01",
+        "late_oil_yield_kg_m3": 494.47,
+        "peak_pressure_bar": 371.64,
+        "cell_water_saturation": 0.004377061497866266
+      },
+      "expected": {
+        "run_id": "case-01",
+        "late_oil_yield_kg_m3": 494.47026346549586,
+        "peak_pressure_bar": 371.63827007478073,
+        "cell_water_saturation": 0.004377061497866266
+      },
+      "total_model_tokens": 390191,
+      "working_seconds": 128.491,
+      "manual_review": "Scientific B, seed1002: answer failed only pressure precision. Correct winner case-01, correct requested cell30 water saturation and yield within tolerance, but371.64 bar differs from371.63827007478073 by0.00172992521927 bar, exceeding frozen0.0005 tolerance. Task asks at least6 significant digits; this pressure has5. Working.csv retained exact pressure, while last summaries rounded it; no final retrieval of that exact value. Source/evidence/integrity and technical checks passed. Failure retained separately from wrong-metric trial05.",
+      "harness_strategies": {
+        "summarization": "scientific",
+        "clear_tool_results": true,
+        "sequential_tools": true,
+        "sanitize_history": true
+      },
+      "evidence": {
+        "log": "logs/2026-10-14T03-53-27-00-00_result-memory_QSiQ28bwBZeaTsh6mQXFWu.eval",
+        "log_sha256": "8997cc7a75207f846e1469479fbf77600b7a87245c11eb3d7e86603757d66f28",
+        "archive": "state/eval-archives/312d8ffb06d243e5a9681338f7af1be2",
+        "archive_manifest_sha256": "04d98b0c81675755f424db7e103adae914d5ee3f88810a74e5fcf0b77d1e7809",
+        "source_manifest_sha256": "4f7ea67f613c0ca5e7a66b1285bde839a92a55550b6aa48680ff8628bfe82f1b"
+      }
+    },
+    {
+      "order": 9,
+      "key": [
+        "long",
+        1,
+        0,
+        2
+      ],
+      "phase": "long",
+      "campaign": "waterflood-b",
+      "condition": "generic",
+      "trial": 2,
+      "seed": 1002,
+      "full_pass": false,
+      "technical_failure": false,
+      "scores": {
+        "scientific_answer": "C",
+        "scientific_sources": "C",
+        "tool_result_numeric_evidence": "C",
+        "study_integrity": "I",
+        "tool_call_count": 32,
+        "context_compaction_count": 5
+      },
+      "score_explanations": {
+        "scientific_answer": "answer.json matches the reference",
+        "scientific_sources": "canonical source rows retrieved",
+        "tool_result_numeric_evidence": "successful grep exposed exact artifact row",
+        "study_integrity": "file access outside this trial; unsupported tool: execute",
+        "tool_call_count": "32 tool calls",
+        "context_compaction_count": "5 context compactions"
+      },
+      "answer": {
+        "run_id": "case-01",
+        "late_oil_yield_kg_m3": 494.47026346549586,
+        "peak_pressure_bar": 371.63827007478073,
+        "cell_water_saturation": 0.004377061497866266
+      },
+      "expected": {
+        "run_id": "case-01",
+        "late_oil_yield_kg_m3": 494.47026346549586,
+        "peak_pressure_bar": 371.63827007478073,
+        "cell_water_saturation": 0.004377061497866266
+      },
+      "total_model_tokens": 493173,
+      "working_seconds": 159.315,
+      "manual_review": "Generic B, seed1002: exact reference answer and correct source/cell evidence, but full pass failed study_integrity. A read_file path typo changed runtime/tmp/jutul-agent-eval to runtime/tmp/jtul-agent-eval (nonexistent and outside trial root); then execute ran ls -la on the correct trial directory, prohibited by the task file-tools-only rule. The ls was read-only, within the local Hanna repository; this is a protocol failure, not wrong science or a runtime fault. Five compactions,32 tool calls; actual API budgets/configuration passed.",
+      "harness_strategies": {
+        "summarization": "generic",
+        "clear_tool_results": true,
+        "sequential_tools": true,
+        "sanitize_history": true
+      },
+      "evidence": {
+        "log": "logs/2026-10-14T03-55-38-00-00_result-memory_FMXyeRhFPGEh7PmRozPG6s.eval",
+        "log_sha256": "dbcd3ffcf25671c1e6c817a4df108f0b8f3988cae09e0d72f5c34a343f811eb2",
+        "archive": "state/eval-archives/a49f7b86793e4a82a5b33d8968eddcf8",
+        "archive_manifest_sha256": "177f66fb1a0a051674cc90e71571418d273b19774bf1b0916d0680539d5b6d1c",
+        "source_manifest_sha256": "4f7ea67f613c0ca5e7a66b1285bde839a92a55550b6aa48680ff8628bfe82f1b"
+      }
+    },
+    {
+      "order": 10,
+      "key": [
+        "long",
+        0,
+        1,
+        2
+      ],
+      "phase": "long",
+      "campaign": "waterflood-a",
+      "condition": "scientific",
+      "trial": 2,
+      "seed": 1002,
+      "full_pass": false,
+      "technical_failure": false,
+      "scores": {
+        "scientific_answer": "C",
+        "scientific_sources": "C",
+        "tool_result_numeric_evidence": "C",
+        "study_integrity": "I",
+        "tool_call_count": 29,
+        "context_compaction_count": 5
+      },
+      "score_explanations": {
+        "scientific_answer": "answer.json matches the reference",
+        "scientific_sources": "canonical source rows retrieved",
+        "tool_result_numeric_evidence": "successful grep exposed exact artifact row",
+        "study_integrity": "attempted to edit a supplied input",
+        "tool_call_count": "29 tool calls",
+        "context_compaction_count": "5 context compactions"
+      },
+      "answer": {
+        "run_id": "case-94",
+        "late_oil_yield_kg_m3": 453.36362727468344,
+        "peak_pressure_bar": 391.98961112291926,
+        "cell_water_saturation": 0.006332091036630685
+      },
+      "expected": {
+        "run_id": "case-94",
+        "late_oil_yield_kg_m3": 453.36362727468344,
+        "peak_pressure_bar": 391.98961112291926,
+        "cell_water_saturation": 0.006332091036630685
+      },
+      "total_model_tokens": 459506,
+      "working_seconds": 163.951,
+      "manual_review": "Scientific A, seed1002: exact reference answer and all source/cell evidence, but full pass failed study_integrity because edit_file targeted supplied campaign-status.csv. The old/new strings were identical; operation succeeded but input bytes stayed unchanged. The frozen rule rejects attempts to edit any supplied input, including no-op edits. No source tampering or runtime fault; five compactions,29 tool calls; actual API budgets/configuration passed.",
+      "harness_strategies": {
+        "summarization": "scientific",
+        "clear_tool_results": true,
+        "sequential_tools": true,
+        "sanitize_history": true
+      },
+      "evidence": {
+        "log": "logs/2026-10-14T03-58-20-00-00_result-memory_fV53JWDTDXG7t3rLqniFXu.eval",
+        "log_sha256": "41e3eed0f1f053abc902a9dda9a1a8551a7114416d581cfe416cd1ef52f0e560",
+        "archive": "state/eval-archives/7fd1de6271c14ce49bf1bdbc3d1c40f3",
+        "archive_manifest_sha256": "0548c4b0036d3ec0449499333994ed6ac41dad6ae57844e2d2d4ca49f0402b95",
+        "source_manifest_sha256": "4f7ea67f613c0ca5e7a66b1285bde839a92a55550b6aa48680ff8628bfe82f1b"
+      }
+    },
+    {
+      "order": 11,
+      "key": [
+        "long",
+        0,
+        1,
+        3
+      ],
+      "phase": "long",
+      "campaign": "waterflood-a",
+      "condition": "scientific",
+      "trial": 3,
+      "seed": 1003,
+      "full_pass": true,
+      "technical_failure": false,
+      "scores": {
+        "scientific_answer": "C",
+        "scientific_sources": "C",
+        "tool_result_numeric_evidence": "C",
+        "study_integrity": "C",
+        "tool_call_count": 22,
+        "context_compaction_count": 4
+      },
+      "score_explanations": {
+        "scientific_answer": "answer.json matches the reference",
+        "scientific_sources": "canonical source rows retrieved",
+        "tool_result_numeric_evidence": "successful grep exposed exact artifact row",
+        "study_integrity": "inputs and current status verified",
+        "tool_call_count": "22 tool calls",
+        "context_compaction_count": "4 context compactions"
+      },
+      "answer": {
+        "run_id": "case-15",
+        "late_oil_yield_kg_m3": 453.36362727468344,
+        "peak_pressure_bar": 391.98961112291926,
+        "cell_water_saturation": 0.07647736017398056
+      },
+      "expected": {
+        "run_id": "case-15",
+        "late_oil_yield_kg_m3": 453.36362727468344,
+        "peak_pressure_bar": 391.98961112291926,
+        "cell_water_saturation": 0.07647736017398056
+      },
+      "total_model_tokens": 368097,
+      "working_seconds": 143.863,
+      "manual_review": "Scientific A, seed1003: all checks passed after4 compactions and22 tool calls. Correct updated winner case-15 and requested cell79. Summaries rounded candidate values but retained sufficient precision; final answer used full reference precision. Five repeated metric-file reads occurred; canonical evidence, unchanged inputs, allowed tools and actual API budgets/configuration passed.",
+      "harness_strategies": {
+        "summarization": "scientific",
+        "clear_tool_results": true,
+        "sequential_tools": true,
+        "sanitize_history": true
+      },
+      "evidence": {
+        "log": "logs/2026-10-14T04-01-07-00-00_result-memory_fxbuW2ZWy3ib9jfWTUkMGv.eval",
+        "log_sha256": "64bdbccb3dbb8a021877bf859492a7a4de8623a159e141268918dc32b733344f",
+        "archive": "state/eval-archives/f58370787d6c448799fc0777dc2126f9",
+        "archive_manifest_sha256": "c4354e9d9647e3bbe7ddada8d10ef0793d24ca5a45b15ba8d2d9fab956ed7d67",
+        "source_manifest_sha256": "4f7ea67f613c0ca5e7a66b1285bde839a92a55550b6aa48680ff8628bfe82f1b"
+      }
+    },
+    {
+      "order": 12,
+      "key": [
+        "long",
+        0,
+        0,
+        3
+      ],
+      "phase": "long",
+      "campaign": "waterflood-a",
+      "condition": "generic",
+      "trial": 3,
+      "seed": 1003,
+      "full_pass": false,
+      "technical_failure": false,
+      "scores": {
+        "scientific_answer": "I",
+        "scientific_sources": "C",
+        "tool_result_numeric_evidence": "C",
+        "study_integrity": "I",
+        "tool_call_count": 22,
+        "context_compaction_count": 4
+      },
+      "score_explanations": {
+        "scientific_answer": "missing, malformed or incorrect answer.json",
+        "scientific_sources": "canonical source rows retrieved",
+        "tool_result_numeric_evidence": "successful grep exposed exact artifact row",
+        "study_integrity": "unsupported tool: execute",
+        "tool_call_count": "22 tool calls",
+        "context_compaction_count": "4 context compactions"
+      },
+      "answer": {
+        "run_id": "case-15",
+        "late_oil_yield_kg_m3": 453.36,
+        "peak_pressure_bar": 391.99,
+        "cell_water_saturation": 0.07647736017398056
+      },
+      "expected": {
+        "run_id": "case-15",
+        "late_oil_yield_kg_m3": 453.36362727468344,
+        "peak_pressure_bar": 391.98961112291926,
+        "cell_water_saturation": 0.07647736017398056
+      },
+      "total_model_tokens": 365357,
+      "working_seconds": 130.995,
+      "manual_review": "Generic A, seed1003: selected correct case-15 and retrieved correct cell79, but full pass failed numeric accuracy and study_integrity. Yield453.36 differs from453.36362727468344 by0.00362727468344, exceeding0.001 tolerance. Pressure391.99 is within0.0005 tolerance; only yield caused numeric failure. Last summaries rounded candidate values despite full precision in working.csv. An execute tool call also violated file-tools-only rule. Canonical/cell evidence and actual API budgets/configuration passed; four compactions,22 tool calls.",
+      "harness_strategies": {
+        "summarization": "generic",
+        "clear_tool_results": true,
+        "sequential_tools": true,
+        "sanitize_history": true
+      },
+      "evidence": {
+        "log": "logs/2026-10-14T04-03-33-00-00_result-memory_HsPEa4gDX7sefZ9BrFbJAi.eval",
+        "log_sha256": "74f06016a9efb03f89cf7e958241d0b72690d86f530fa5b0e85505949c953e25",
+        "archive": "state/eval-archives/4ce3e0e036584129818dea9b2d2d3888",
+        "archive_manifest_sha256": "57d034b38cbcb052fc9f849e8b1968b22cf35bed2464bfc741531d1378f2b405",
+        "source_manifest_sha256": "4f7ea67f613c0ca5e7a66b1285bde839a92a55550b6aa48680ff8628bfe82f1b"
+      }
+    },
+    {
+      "order": 13,
+      "key": [
+        "long",
+        1,
+        0,
+        3
+      ],
+      "phase": "long",
+      "campaign": "waterflood-b",
+      "condition": "generic",
+      "trial": 3,
+      "seed": 1003,
+      "full_pass": false,
+      "technical_failure": false,
+      "scores": {
+        "scientific_answer": "I",
+        "scientific_sources": "C",
+        "tool_result_numeric_evidence": "I",
+        "study_integrity": "C",
+        "tool_call_count": 22,
+        "context_compaction_count": 3
+      },
+      "score_explanations": {
+        "scientific_answer": "missing, malformed or incorrect answer.json",
+        "scientific_sources": "canonical source rows retrieved",
+        "tool_result_numeric_evidence": "no successful retrieval exposed the required artifact row/values",
+        "study_integrity": "inputs and current status verified",
+        "tool_call_count": "22 tool calls",
+        "context_compaction_count": "3 context compactions"
+      },
+      "answer": null,
+      "expected": {
+        "run_id": "case-92",
+        "late_oil_yield_kg_m3": 494.47026346549586,
+        "peak_pressure_bar": 371.63827007478073,
+        "cell_water_saturation": 0.05105835697043627
+      },
+      "total_model_tokens": 365409,
+      "working_seconds": 117.174,
+      "manual_review": "Generic B, seed1003: failed answer and cell evidence because no cell row was retrieved and no answer.json was written. The final user request (cell79, exact JSON keys, write-file instruction) was delivered and remained in the final model inputs; model only reread campaign-status.csv, listed valid candidates and said ready for the next instruction. Seven user turns completed with ordinary stop, no limits/truncation/runtime error. Canonical metric retrieval and input/tool integrity passed; three compactions,22 tool calls. Preserved as failure to finish the requested workflow.",
+      "harness_strategies": {
+        "summarization": "generic",
+        "clear_tool_results": true,
+        "sequential_tools": true,
+        "sanitize_history": true
+      },
+      "evidence": {
+        "log": "logs/2026-10-14T04-05-47-00-00_result-memory_kKQwrRwfRCg3KX4nBpjB9L.eval",
+        "log_sha256": "cf207b7c1f24b3c81bc6f22fb6c4605fc4c31b91554269bb7ae1bd3fd3a58fd0",
+        "archive": "state/eval-archives/689f925ea8024ce3965b7d074bcea10a",
+        "archive_manifest_sha256": "93f08f416312b9431f373c86b9fd3d932b7f86fb2225925595d7442a70abbbc3",
+        "source_manifest_sha256": "4f7ea67f613c0ca5e7a66b1285bde839a92a55550b6aa48680ff8628bfe82f1b"
+      }
+    },
+    {
+      "order": 14,
+      "key": [
+        "long",
+        1,
+        1,
+        3
+      ],
+      "phase": "long",
+      "campaign": "waterflood-b",
+      "condition": "scientific",
+      "trial": 3,
+      "seed": 1003,
+      "full_pass": true,
+      "technical_failure": false,
+      "scores": {
+        "scientific_answer": "C",
+        "scientific_sources": "C",
+        "tool_result_numeric_evidence": "C",
+        "study_integrity": "C",
+        "tool_call_count": 20,
+        "context_compaction_count": 3
+      },
+      "score_explanations": {
+        "scientific_answer": "answer.json matches the reference",
+        "scientific_sources": "canonical source rows retrieved",
+        "tool_result_numeric_evidence": "successful grep exposed exact artifact row",
+        "study_integrity": "inputs and current status verified",
+        "tool_call_count": "20 tool calls",
+        "context_compaction_count": "3 context compactions"
+      },
+      "answer": {
+        "run_id": "case-92",
+        "late_oil_yield_kg_m3": 494.47026346549586,
+        "peak_pressure_bar": 371.63827007478073,
+        "cell_water_saturation": 0.05105835697043627
+      },
+      "expected": {
+        "run_id": "case-92",
+        "late_oil_yield_kg_m3": 494.47026346549586,
+        "peak_pressure_bar": 371.63827007478073,
+        "cell_water_saturation": 0.05105835697043627
+      },
+      "total_model_tokens": 337061,
+      "working_seconds": 107.662,
+      "manual_review": "Scientific B, seed1003: all checks passed after3 compactions and20 tool calls. Recovered a guessed nonexistent case-90 filename through glob; reread canonical metrics and current status, retrieved requested cell79 from case-92, and wrote exact reference answer. Five repeated metric-file reads; actual API budgets/configuration passed.",
+      "harness_strategies": {
+        "summarization": "scientific",
+        "clear_tool_results": true,
+        "sequential_tools": true,
+        "sanitize_history": true
+      },
+      "evidence": {
+        "log": "logs/2026-10-14T04-07-48-00-00_result-memory_Cv59hcJxGoKiL6KjNcftiA.eval",
+        "log_sha256": "475a7c31f62fab67314d0dc83e033527f211b7cd2874467dd26fb29adc796d40",
+        "archive": "state/eval-archives/0883bdffb70d48c8a850a4c4f57f9447",
+        "archive_manifest_sha256": "b86d568597dfad95c1f5ac943ee533a45c059f777fe364e1b54fc32cf233521e",
+        "source_manifest_sha256": "4f7ea67f613c0ca5e7a66b1285bde839a92a55550b6aa48680ff8628bfe82f1b"
+      }
+    }
+  ],
+  "summary": [
+    {
+      "phase": "short",
+      "campaign": "waterflood-a",
+      "condition": "generic",
+      "n": 1,
+      "full_pass": 0,
+      "correct_answer": 0,
+      "mean_tool_calls": 3.0,
+      "mean_summaries": 0.0,
+      "mean_tokens": 46583.0,
+      "mean_seconds": 21.865
+    },
+    {
+      "phase": "short",
+      "campaign": "waterflood-b",
+      "condition": "generic",
+      "n": 1,
+      "full_pass": 1,
+      "correct_answer": 1,
+      "mean_tool_calls": 5.0,
+      "mean_summaries": 0.0,
+      "mean_tokens": 71023.0,
+      "mean_seconds": 21.195
+    },
+    {
+      "phase": "long",
+      "campaign": "waterflood-a",
+      "condition": "generic",
+      "n": 3,
+      "full_pass": 2,
+      "correct_answer": 2,
+      "mean_tool_calls": 20.666666666666668,
+      "mean_summaries": 3.6666666666666665,
+      "mean_tokens": 349017.3333333333,
+      "mean_seconds": 125.266
+    },
+    {
+      "phase": "long",
+      "campaign": "waterflood-a",
+      "condition": "scientific",
+      "n": 3,
+      "full_pass": 2,
+      "correct_answer": 3,
+      "mean_tool_calls": 28.666666666666668,
+      "mean_summaries": 5.0,
+      "mean_tokens": 456104.0,
+      "mean_seconds": 166.725
+    },
+    {
+      "phase": "long",
+      "campaign": "waterflood-b",
+      "condition": "generic",
+      "n": 3,
+      "full_pass": 1,
+      "correct_answer": 2,
+      "mean_tool_calls": 29.0,
+      "mean_summaries": 4.666666666666667,
+      "mean_tokens": 456534.6666666667,
+      "mean_seconds": 158.69433333333333
+    },
+    {
+      "phase": "long",
+      "campaign": "waterflood-b",
+      "condition": "scientific",
+      "n": 3,
+      "full_pass": 1,
+      "correct_answer": 1,
+      "mean_tool_calls": 25.0,
+      "mean_summaries": 4.333333333333333,
+      "mean_tokens": 406990.0,
+      "mean_seconds": 142.59166666666667
+    }
+  ]
+}

@@ -1,0 +1,364 @@
+{
+  "schema": "jutul-result-memory-pilot-export-v1",
+  "policy": "result-memory-cached-metrics-v5",
+  "scope": "Complete 14-trial outcome export with calibrated simulation CSVs. Full API logs and source/trace archives are retained locally and are not included in this bundle.",
+  "local_archive": "output/experiments/qwen35-memory-pilot-2026-10-13",
+  "primary_scores_unchanged": true,
+  "objective": {
+    "quantity": "late oil mass per prescribed injection volume",
+    "unit": "kg/m3",
+    "formula": "(RF720 - RF360) * initial_oil_mass_kg / (configured_injection_rate_m3_day * 360)",
+    "status": "current campaign status must be valid",
+    "pressure_metric": "peak over the whole simulation history",
+    "peak_pressure_limit_bar": 550,
+    "cell_artifact": "final-time CSV with 192 cells"
+  },
+  "output_contract": {
+    "file": "answer.json",
+    "keys": [
+      "run_id",
+      "late_oil_yield_kg_m3",
+      "peak_pressure_bar",
+      "cell_water_saturation"
+    ],
+    "absolute_tolerances": {
+      "late_oil_yield_kg_m3": 0.001,
+      "peak_pressure_bar": 0.0005,
+      "cell_water_saturation": 5e-07
+    },
+    "prompt_precision": "at least six significant digits",
+    "chat_prose_is_not_the_requested_file": true,
+    "full_pass_requires": [
+      "scientific_answer",
+      "scientific_sources",
+      "tool_result_numeric_evidence",
+      "study_integrity"
+    ]
+  },
+  "study": {
+    "conditions": [
+      {
+        "clear_tool_results": true,
+        "sanitize_history": true,
+        "sequential_tools": true,
+        "summarization": "generic"
+      },
+      {
+        "clear_tool_results": true,
+        "sanitize_history": true,
+        "sequential_tools": true,
+        "summarization": "scientific"
+      }
+    ],
+    "order": [
+      [
+        "short",
+        0,
+        0,
+        1
+      ],
+      [
+        "short",
+        1,
+        0,
+        1
+      ],
+      [
+        "long",
+        0,
+        0,
+        1
+      ],
+      [
+        "long",
+        0,
+        1,
+        1
+      ],
+      [
+        "long",
+        1,
+        1,
+        1
+      ],
+      [
+        "long",
+        1,
+        0,
+        1
+      ],
+      [
+        "long",
+        0,
+        0,
+        2
+      ],
+      [
+        "long",
+        1,
+        1,
+        2
+      ],
+      [
+        "long",
+        1,
+        0,
+        2
+      ],
+      [
+        "long",
+        0,
+        1,
+        2
+      ],
+      [
+        "long",
+        0,
+        1,
+        3
+      ],
+      [
+        "long",
+        0,
+        0,
+        3
+      ],
+      [
+        "long",
+        1,
+        0,
+        3
+      ],
+      [
+        "long",
+        1,
+        1,
+        3
+      ]
+    ],
+    "seed_policy": "1000 + trial, paired across campaigns and conditions",
+    "generation": {
+      "attempt_timeout": 120,
+      "extra_body": {
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "top_k": 20
+      },
+      "max_retries": 2,
+      "max_tokens": 2048,
+      "presence_penalty": 1.5,
+      "temperature": 0.7,
+      "timeout": 180,
+      "top_p": 0.8
+    },
+    "scope": "Two calibrated campaigns, repeated model seeds per condition; a pilot, not independent evidence across many scientific problems.",
+    "trials_per_campaign_condition": 3
+  },
+  "model": {
+    "id": "Qwen/Qwen3.5-9B",
+    "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+    "tokenizer_revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+    "dtype": "BF16",
+    "context_window": 16384,
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "packages": {
+      "huggingface-hub": "1.32.0",
+      "torch": "2.13.0+cu132",
+      "transformers": "5.17.0",
+      "vllm": "0.29.0"
+    },
+    "snapshot_files": {
+      "LICENSE": {
+        "bytes": 11544,
+        "sha256": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"
+      },
+      "chat_template.jinja": {
+        "bytes": 7756,
+        "sha256": "a4aee8afcf2e0711942cf848899be66016f8d14a889ff9ede07bca099c28f715"
+      },
+      "config.json": {
+        "bytes": 3126,
+        "sha256": "d0883072e01861ed0b2d47be3c16c36a8e81c224c7ffaa310c6558fb3f932b05"
+      },
+      "merges.txt": {
+        "bytes": 3353259,
+        "sha256": "a9d356d7bdf1ef4949e3e748e95b8e10ad9d4e2e838eddc38a0a7b6b94d1db8d"
+      },
+      "model.safetensors-00001-of-00004.safetensors": {
+        "bytes": 5276436216,
+        "expected_sha256": "db6f444b43d318c92f360a13a25561a6a65b10c0631b8ed305a426dbaa6c380e",
+        "sha256": "db6f444b43d318c92f360a13a25561a6a65b10c0631b8ed305a426dbaa6c380e"
+      },
+      "model.safetensors-00002-of-00004.safetensors": {
+        "bytes": 5335161512,
+        "expected_sha256": "31c7d7e2dd5d207840b31cc59083c8f4c4718959149e0358c0364052bb9a0330",
+        "sha256": "31c7d7e2dd5d207840b31cc59083c8f4c4718959149e0358c0364052bb9a0330"
+      },
+      "model.safetensors-00003-of-00004.safetensors": {
+        "bytes": 5368717440,
+        "expected_sha256": "7ec36ba3a4176a44c3c0876ad80c56a2f70c84bf008d82e9501df642f17dadec",
+        "sha256": "7ec36ba3a4176a44c3c0876ad80c56a2f70c84bf008d82e9501df642f17dadec"
+      },
+      "model.safetensors-00004-of-00004.safetensors": {
+        "bytes": 3325995712,
+        "expected_sha256": "b62b0c4cd7e44edee103ee8f4fe225f246d5e768e07bfd5f25b63a8aa1fdd0c6",
+        "sha256": "b62b0c4cd7e44edee103ee8f4fe225f246d5e768e07bfd5f25b63a8aa1fdd0c6"
+      },
+      "model.safetensors.index.json": {
+        "bytes": 79657,
+        "sha256": "26d3539b516be613f39563617cb9d33b3f83d401298125be392c80cefb8f7fe5"
+      },
+      "preprocessor_config.json": {
+        "bytes": 390,
+        "sha256": "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516"
+      },
+      "tokenizer.json": {
+        "bytes": 12807982,
+        "sha256": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42"
+      },
+      "tokenizer_config.json": {
+        "bytes": 16710,
+        "sha256": "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"
+      },
+      "video_preprocessor_config.json": {
+        "bytes": 385,
+        "sha256": "7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13"
+      },
+      "vocab.json": {
+        "bytes": 6722759,
+        "sha256": "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003"
+      }
+    }
+  },
+  "runtime": {
+    "context_policy": "unscaled-full-request-budget-with-small-window-margin-v7",
+    "context_window": 16384,
+    "deps": {
+      "deepagents": "0.7.18",
+      "inspect-ai": "0.3.263",
+      "langchain": "1.4.2",
+      "langchain-anthropic": "1.7.4",
+      "langchain-core": "1.6.4",
+      "langchain-openai": "1.6.0",
+      "langgraph": "1.2.12"
+    },
+    "harness_strategies": {
+      "clear_tool_results": true,
+      "sanitize_history": true,
+      "sequential_tools": true,
+      "summarization": "generic"
+    },
+    "julia_environment_sha256": "de7620b89f6353c1349ccccef0efa4a3254b57a433d46bc4b352f0545673dc9d",
+    "jutul_agent": {
+      "commit": "6bcdd362acd3402e0fb2e0492b153601cec76b96",
+      "dirty": true,
+      "version": "0.1.dev271+g6bcdd362a"
+    },
+    "manifest_sha256": "29d2d900a4fba04deacf195626e0d58f40972d9b0203de2a1a1cb7e26046c419",
+    "message_history_sanitization": "strip-internal-reasoning-capsules-before-model-v1",
+    "model_output_policy": "stop-on-truncated-model-and-summary-output-v2",
+    "path_policy": "agent-visible-to-real-path-resolution-v1",
+    "prompt_sha256": "de42e01d0a6891a03effd31602b2759a2cb92cc0ead05bfea5d15b2e71dfc5a8",
+    "runtime": {
+      "platform": "darwin",
+      "python": "3.13.7"
+    },
+    "simulator": "jutuldarcy",
+    "skills_sha256": {
+      "ensembles": "56e6f28e46edcb9bcff77682cf601d83bbe1be744bf78fb796f216fbd36b3b7a",
+      "investigation-loop": "1510df4366741b142ff6a700283882f07c7e60610788264d1ec46b858a6e1d06",
+      "julia-and-repl": "d2059627be909242887d1edecaa739f5de308e083fcb1468297bd777fcc4b145",
+      "jutuldarcy-overview": "f7d5e15d6c9a46d96e16575918ddaad8eece7d683f61cbb49bf960a740581231",
+      "jutuldarcy-wells": "fba7e10adcaea0bf32753aa63134f5c208cd05065ac799b64bb280dac69431c6",
+      "plotting-basics": "906b8f8e35f6b3166dbbfc86b2779ecb64b5a80e8a8fad0767f5731617d1ecdc",
+      "workspace-and-source": "76e114eeb718b37d7b888ca7237330e1e6d398a3f0bfe63656560923e4f51b58"
+    },
+    "small_window_token_margin": 1024,
+    "summarization_prompt_sha256": "fdb91051f07beef2b55f3e4115eaa9c5a097d088a18fe8a52f6fcf1287dab3eb",
+    "summary_policy": "complete-observed-facts-with-verbatim-user-request-v2",
+    "summary_sanitization": "strip-internal-reasoning-capsules-v1",
+    "tool_result_retention": {
+      "cleared_prefix_lines": 3,
+      "cleared_prefix_max_chars": 512,
+      "filesystem_token_limit": 512,
+      "small_result_max_chars": 2048
+    },
+    "tool_scheduling": "request-sequential-provider-tools-v2"
+  },
+  "source": {
+    "manifest_sha256": "b0b9732f041952cf5aa9390a5c658676aad60d8d02c8fcb988be9ebe72f8923e",
+    "archive_sha256": "4be9150d9794d510625a8c9fded6bad8ecdde305052424dcac693655c45f5663",
+    "model_facing_sha256": "64cc96e2bb491633d32f4884d8cd4eb519d9b617ee79f446c26cedd152e4fadb"
+  },
+  "original_frozen_files_sha256": {
+    "plan.json": "02e68698e0b4d6402e3442b47d3255ec5b4df33485c0e4562fc4c7c8b7707208",
+    "runs.jsonl": "8d2b8cf9bd59f42a7da1c7062653add17dc36d089bc33b69f915c8c53ec74876",
+    "server.json": "4f7045cae92a8024a97779d2f7c44bccf0dc8f7c7c86078f6f3af4659b6fc96b"
+  },
+  "calibration": {
+    "waterflood-a": {
+      "julia_environment_sha256": "de7620b89f6353c1349ccccef0efa4a3254b57a433d46bc4b352f0545673dc9d",
+      "manifest_sha256": "29d2d900a4fba04deacf195626e0d58f40972d9b0203de2a1a1cb7e26046c419",
+      "calibration_source_sha256": "9a4580cbe1f5d02a914a69a901768bb4602822546aeb70bff85ee724280e38ab",
+      "artifact_files": {
+        "reference/waterflood-a/results/run-cedar.csv": "3e346fb040f4102ebfb3ef2aa44e4f0d545b5fbb9a61878bba829af74d056963",
+        "reference/waterflood-a/results/run-falcon.csv": "6dd5701018edd2421314e3f73224fff253a772549c89d204524b5095a79e2103",
+        "reference/waterflood-a/results/run-lotus.csv": "c64056cb760edb04491ffd30b3a4502332e607aa49a76e46365bf532026d485e",
+        "reference/waterflood-a/results/run-maple.csv": "49d1bb57733eb0174187625fd8c75d8394489825b59dd6800e75fc872b41a037",
+        "reference/waterflood-a/results/run-raven.csv": "22125af2b2c66b807e39d12a3a835085e3da25d8837fc217d2d467e7bf078455",
+        "reference/waterflood-a/results/run-sable.csv": "cb782ea00c7f0264eaafcd66f111d6c7152385e651338e41a53d7124fcc6635f",
+        "reference/waterflood-a/diagnostics/run-cedar-history.csv": "1d136fdfa6256f30a6f7d3fd5a60f786acb84242337304102d9ed80a992ef820",
+        "reference/waterflood-a/diagnostics/run-cedar.csv": "73c6af3b3c045c2e6b03151020351ff8039e2ffa125a61943dcb7d20d6310e55",
+        "reference/waterflood-a/diagnostics/run-falcon-history.csv": "01d45cb490d848d82496c7c9243520cf384d7248f8647d4b07f3c429fa35a4ea",
+        "reference/waterflood-a/diagnostics/run-falcon.csv": "6a7f745049306681eec9791cb556c7c2d419d72f82a189da32faf9fd4b0897db",
+        "reference/waterflood-a/diagnostics/run-lotus-history.csv": "785a4249cb04172aea24091b4fd032d1fe479bdfa73a8d001827dc5631e77b38",
+        "reference/waterflood-a/diagnostics/run-lotus.csv": "2880d6ff91e7f8019c5786a921fb5e5b62e9450154ccdb62d51da6248426d715",
+        "reference/waterflood-a/diagnostics/run-maple-history.csv": "bbda2a9b5e0b552c2ea64090159c747cdc57fc419fae370ef3d64f13bb824799",
+        "reference/waterflood-a/diagnostics/run-maple.csv": "58ef662edcbcc5a4904f4e567970be38d1880bcd598955af214cc6f85d6d691c",
+        "reference/waterflood-a/diagnostics/run-raven-history.csv": "40777106b2867ebf3e46cf5eb53af982c7425e10eb4f2164996a023e19b8ed7c",
+        "reference/waterflood-a/diagnostics/run-raven.csv": "1130226e882f6dcde8927cde32c219635de96167f2aae4003e703b7741a9668e",
+        "reference/waterflood-a/diagnostics/run-sable-history.csv": "cf4fa9674f3c8d8aed5f020a49ad1dc46e3af3c139752ad58ebee1b45f633693",
+        "reference/waterflood-a/diagnostics/run-sable.csv": "9a82f556e3f7fa3e9e699d13735d0309b8e2dc5533357537dbe75445f5c67465",
+        "reference/waterflood-a/campaign.jl": "7aea1d2c705b3b70dc50818dcc4f0f20743578a4c3835c487252b8346dc94d83"
+      }
+    },
+    "waterflood-b": {
+      "julia_environment_sha256": "de7620b89f6353c1349ccccef0efa4a3254b57a433d46bc4b352f0545673dc9d",
+      "manifest_sha256": "29d2d900a4fba04deacf195626e0d58f40972d9b0203de2a1a1cb7e26046c419",
+      "calibration_source_sha256": "9a4580cbe1f5d02a914a69a901768bb4602822546aeb70bff85ee724280e38ab",
+      "artifact_files": {
+        "reference/waterflood-b/results/run-cedar.csv": "87bcd128619d567c4ea4d51fabc19570f9a799ef4595dade21eece6261b3bfad",
+        "reference/waterflood-b/results/run-falcon.csv": "8f62ad790c083b1292fdf5af743c6a6c3fd820af46a4b2f9e4ac968e3617967a",
+        "reference/waterflood-b/results/run-lotus.csv": "cbb7de51749dc7546d276aa547d15c5bc39af1c093df630f73bd2cc621acd017",
+        "reference/waterflood-b/results/run-maple.csv": "1141b311e1198e553c470ebf2826ab9628a2c6044497a2ede75fc8fa56bd036c",
+        "reference/waterflood-b/results/run-raven.csv": "326d9c65e9744e20f55b31947e80096d463a4c564bd1fbb11e3f9a3c738284b7",
+        "reference/waterflood-b/results/run-sable.csv": "88ff5953309833f828cb984b86ace70c1b21192e118a1b3f2da31e7b09eccbf6",
+        "reference/waterflood-b/diagnostics/run-cedar-history.csv": "469dee865c5c7cd32d894bc2f2d3f94b136b3fe7f93bcee59963bb88075348f9",
+        "reference/waterflood-b/diagnostics/run-cedar.csv": "d721d6d52418f228074bd35b4483caa781ae8395cf8d4653a69148146fbd40df",
+        "reference/waterflood-b/diagnostics/run-falcon-history.csv": "799d446e36ee75147bcb978db49ca1d7ce7a03a0937d84d80feec45b3ace2a94",
+        "reference/waterflood-b/diagnostics/run-falcon.csv": "3fa95e5d7f7545f8720e03f4bf93e2daf0f29ab7b28a74cb2f35c3ed1442e123",
+        "reference/waterflood-b/diagnostics/run-lotus-history.csv": "71f3dc33b4fb5b60ab6a773eb3e84128fe0e461fced18d78623a014d157a502a",
+        "reference/waterflood-b/diagnostics/run-lotus.csv": "cb1c3ab6b53189b36bfc3f01fa63cb502a9dfdd69e90526ac55e801376576b22",
+        "reference/waterflood-b/diagnostics/run-maple-history.csv": "43bb4826a7fa173370a75223aa229ee6d1a92520e5e98201a483464309c1f4e5",
+        "reference/waterflood-b/diagnostics/run-maple.csv": "17b966202f1874ac93a5dc5b04887c3675a679d7d0673abb5a0616794a1a920e",
+        "reference/waterflood-b/diagnostics/run-raven-history.csv": "ee92833431052b78d997e1d8aa03d4f0792d2034de4683c5629c6dc8204b5196",
+        "reference/waterflood-b/diagnostics/run-raven.csv": "4f49d32b65cc8a99c1d451184565c0dd1552b330b47df4b124d6c5a35c510c5e",
+        "reference/waterflood-b/diagnostics/run-sable-history.csv": "a02aac8692af7559aa6fa16b94b72efbd8fceb6fd4bff85ed2914e884691cadf",
+        "reference/waterflood-b/diagnostics/run-sable.csv": "b604d46eb1ad7db6353872ed9c575805a7454dac2cb8ed0df904adcf4a8ddcc8",
+        "reference/waterflood-b/campaign.jl": "6e141d53e84777991e45d42ca8fd0cb275db5ba2eb27f03c8847f9d1c8502362"
+      }
+    }
+  },
+  "audit": {
+    "completed": 14,
+    "technical_failures": 0,
+    "actual_model_requests": 457,
+    "max_actual_input_tokens": 13887,
+    "original_four_unchanged": true,
+    "post_batch_server_unchanged": true,
+    "full_manual_review_complete": true,
+    "reserved_output_tokens": 2048,
+    "remote_work_root": "/home/marcel/hanna/"
+  }
+}
